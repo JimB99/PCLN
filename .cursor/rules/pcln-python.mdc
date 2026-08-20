@@ -1,0 +1,28 @@
+---
+description: PCLN Python conventions
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# PCLN Python
+
+## Imports
+
+Scripts add project root via `sys.path.insert(0, str(ROOT))`.
+
+## Data loaders
+
+Return `(DataLoader, vocab_size, vocab_mappings)` from all `get_*_dataloader` helpers.
+
+## Checkpoints
+
+`train_full.py` must save non-empty `vocab_mappings` with `tokenization` field (`word`, `char`, or `dummy`).
+
+## Tests
+
+Add unit tests for new calculators, parsers, and domain rules before wiring UI/scripts.
+
+## Known limitations (document, do not hide)
+
+- `DynamicNeuronLayer` computes all neurons then selects top-k (sparse routing, not sparse FLOPs)
+- `SparseMoEPCNBlock` uses Python loops over sequence length (slow at scale)

@@ -1,5 +1,7 @@
+# PyTorch: install separately to match CPU vs CUDA (see docs/SETUP.md)
+# CPU:  pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+# GPU:  pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cu121
 
-# Core libraries (torch will be installed separately to match CUDA)
 transformers==4.35.0
 datasets==2.14.0
 sentencepiece==0.1.99
@@ -12,4 +14,3 @@ pyarrow==15.0.0
 
 # Testing
 pytest==7.4.3
-

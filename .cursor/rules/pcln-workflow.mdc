@@ -1,0 +1,26 @@
+---
+description: PCLN session workflow for agents
+alwaysApply: true
+---
+
+# PCLN workflow
+
+## Session start
+
+1. Read `docs/GPU_NEXT_STEPS.md` if benchmark or GPU work is in scope
+2. Read `README.md` for current status and feature flags
+3. Activate `.venv` (see `docs/SETUP.md`)
+4. Run `pytest tests/ -q` before large training changes
+
+## Session end
+
+1. Update `docs/benchmark_summary.md` if benchmark results changed
+2. Update `docs/GPU_NEXT_STEPS.md` only if the GPU checklist itself changes
+3. Keep `README.md` as the human-facing overview
+
+## Do not
+
+- Create scattered markdown outside `docs/` and `README.md`
+- Trust pre-Aug-2026-fix benchmark results
+- Skip saving vocab mappings in training checkpoints
+- Run full benchmark suite on CPU-only hardware

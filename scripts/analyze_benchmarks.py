@@ -65,47 +65,45 @@ def parse_checkpoint_logs(checkpoint_dir):
 
 
 def parse_training_log(log_file):
-    """Extract key metrics from training log"""
+    """Extract key metrics from training.log written by train_full.py."""
     metrics = {
         "final_train_loss": None,
         "final_val_loss": None,
         "best_val_loss": None,
         "epochs_completed": 0,
+        "train_loss": [],
+        "val_loss": [],
         "generation_samples": [],
         "errors": []
     }
-    
+
     if not Path(log_file).exists():
         return metrics
-    
-    with open(log_file, 'r') as f:
+
+    with open(log_file, "r", encoding="utf-8") as f:
         content = f.read()
-    
-    # Look for loss patterns like "Epoch 1/8 | train_loss: 5.234 | val_loss: 5.567"
-    epoch_pattern = r"Epoch\s+(\d+)/(\d+).*?train_loss:\s*([\d.]+).*?val_loss:\s*([\d.]+)"
+
+    epoch_pattern = (
+        r"Epoch\s+(\d+)\s+finished\s+\|\s+train_loss=([\d.]+)\s+\|\s+val_loss=([\d.]+)"
+    )
     matches = re.findall(epoch_pattern, content)
-    
+
     if matches:
-        metrics["epochs_completed"] = int(matches[-1][1])  # Total epochs from last match
-        final_match = matches[-1]
-        metrics["final_train_loss"] = float(final_match[2])
-        metrics["final_val_loss"] = float(final_match[3])
-        
-        # Find best validation loss
-        all_val_losses = [float(m[3]) for m in matches]
-        metrics["best_val_loss"] = min(all_val_losses)
-    
-    # Look for generation samples
+        metrics["epochs_completed"] = int(matches[-1][0])
+        metrics["train_loss"] = [float(m[1]) for m in matches]
+        metrics["val_loss"] = [float(m[2]) for m in matches]
+        metrics["final_train_loss"] = metrics["train_loss"][-1]
+        metrics["final_val_loss"] = metrics["val_loss"][-1]
+        metrics["best_val_loss"] = min(metrics["val_loss"])
+
     gen_pattern = r"Generated:\s*(.+?)(?:\n|$)"
     gen_matches = re.findall(gen_pattern, content)
     if gen_matches:
-        metrics["generation_samples"] = gen_matches[:3]  # First 3 samples
-    
-    # Look for errors
-    error_pattern = r"Error|Exception|Traceback"
-    if re.search(error_pattern, content):
+        metrics["generation_samples"] = gen_matches[:3]
+
+    if re.search(r"Error|Exception|Traceback", content):
         metrics["errors"].append("Found error patterns in log")
-    
+
     return metrics
 
 
@@ -119,17 +117,17 @@ def analyze_experiment(exp_dir, exp_key):
     analysis = {
         "exp_key": exp_key,
         "exists": True,
-        "checkpoint_dir": exp_path / "checkpoints",
+        "checkpoint_dir": exp_path,
         "training_log": exp_path / "training.log",
     }
-    
-    # Parse training log
+
     if analysis["training_log"].exists():
-        analysis.update(parse_training_log(str(analysis["training_log"])))
-    
-    # Parse checkpoint logs
-    if analysis["checkpoint_dir"].exists():
-        analysis["checkpoint_metrics"] = parse_checkpoint_logs(str(analysis["checkpoint_dir"]))
+        log_metrics = parse_training_log(str(analysis["training_log"]))
+        analysis.update(log_metrics)
+
+    json_metrics = parse_checkpoint_logs(str(exp_path))
+    if json_metrics.get("val_loss"):
+        analysis["checkpoint_metrics"] = json_metrics
     
     return analysis
 

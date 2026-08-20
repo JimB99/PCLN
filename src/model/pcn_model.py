@@ -73,7 +73,6 @@ class PCLN(nn.Module):
         super().__init__()
         self.vocab_size = vocab_size
         self.d_model = d_model
-        self.num_pcn_blocks = num_pcn_blocks
         self.use_memory = use_memory
         self.use_sparse_moe = use_sparse_moe
         self.use_dynamic_neurons = use_dynamic_neurons
@@ -90,10 +89,10 @@ class PCLN(nn.Module):
             max_len=max_seq_len,
         )
 
-        # PCN refinement blocks: choose variant
-        # Priority: dynamic_neurons > sparse_moe > standard
+        # PCN refinement blocks: composable when multiple flags are set
+        blocks: list[nn.Module] = []
         if use_dynamic_neurons:
-            self.pcn_blocks = nn.ModuleList([
+            blocks.append(
                 DynamicNeuronBlock(
                     d_model=d_model,
                     num_neurons=num_neurons,
@@ -101,10 +100,9 @@ class PCLN(nn.Module):
                     K=K_pcn,
                     alpha=alpha_pcn,
                 )
-                for _ in range(num_pcn_blocks)
-            ])
-        elif use_sparse_moe:
-            self.pcn_blocks = nn.ModuleList([
+            )
+        if use_sparse_moe:
+            blocks.append(
                 SparseMoEPCNBlock(
                     d_model=d_model,
                     num_experts=num_experts,
@@ -112,13 +110,14 @@ class PCLN(nn.Module):
                     K_refine=K_pcn,
                     alpha=alpha_pcn,
                 )
-                for _ in range(num_pcn_blocks)
-            ])
-        else:
-            self.pcn_blocks = nn.ModuleList([
+            )
+        if not blocks:
+            blocks = [
                 PCNBlock(d_model=d_model, K=K_pcn, alpha=alpha_pcn)
                 for _ in range(num_pcn_blocks)
-            ])
+            ]
+        self.pcn_blocks = nn.ModuleList(blocks)
+        self.num_pcn_blocks = len(blocks)
 
         # Memory module (optional)
         if use_memory:
@@ -162,12 +161,12 @@ class PCLN(nn.Module):
         load_balance_loss = torch.tensor(0.0, device=latent.device, dtype=latent.dtype)
 
         for pcn_block in self.pcn_blocks:
-            if self.use_dynamic_neurons:
+            if isinstance(pcn_block, DynamicNeuronBlock):
                 latent, errors, lb_loss = pcn_block(latent, training=self.training)
                 load_balance_loss = load_balance_loss + lb_loss
                 errors_all.append(errors)
-            elif self.use_sparse_moe:
-                latent, errors, lb_loss, expert_usage = pcn_block(
+            elif isinstance(pcn_block, SparseMoEPCNBlock):
+                latent, errors, lb_loss, _expert_usage = pcn_block(
                     latent, training=self.training
                 )
                 load_balance_loss = load_balance_loss + lb_loss

@@ -25,7 +25,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.model import PCLN
-from src.data import get_dummy_dataloader, get_wikitext2_dataloader
+from src.data import (
+    get_dummy_dataloader,
+    get_wikitext2_dataloader,
+    get_wikitext2_char_dataloader,
+)
 
 
 class Trainer:
@@ -46,7 +50,6 @@ class Trainer:
 
         # Load data
         self._load_data()
-        self.vocab_mappings = None  # Will be populated if dataset has vocab
 
         # Build model
         self.model = PCLN(
@@ -88,23 +91,23 @@ class Trainer:
 
     def _load_data(self):
         """Load training and validation data."""
-        # Custom text file takes priority
+        self.vocab_mappings = {"tokenization": "dummy"}
+
         if self.args.data_file:
             from src.data import get_text_file_dataloader, get_char_level_dataloader
-            
+
             data_type = "char-level" if self.args.use_char_level else "word-level"
             self.log(f"Loading custom text file ({data_type}): {self.args.data_file}...")
-            
+
             if self.args.use_char_level:
-                train_loader, self.vocab_size = get_char_level_dataloader(
+                train_loader, self.vocab_size, self.vocab_mappings = get_char_level_dataloader(
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
                     max_samples=self.args.num_train_samples,
                     shuffle=True,
                 )
-                # For validation, use different samples if possible, else reload
-                val_loader, _ = get_char_level_dataloader(
+                val_loader, _, _ = get_char_level_dataloader(
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
@@ -112,7 +115,7 @@ class Trainer:
                     shuffle=False,
                 )
             else:
-                train_loader, self.vocab_size = get_text_file_dataloader(
+                train_loader, self.vocab_size, self.vocab_mappings = get_text_file_dataloader(
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
@@ -120,7 +123,7 @@ class Trainer:
                     max_samples=self.args.num_train_samples,
                     shuffle=True,
                 )
-                val_loader, _ = get_text_file_dataloader(
+                val_loader, _, _ = get_text_file_dataloader(
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
@@ -130,14 +133,14 @@ class Trainer:
                 )
         elif self.args.dataset == "dummy":
             self.log("Loading dummy dataset...")
-            train_loader, self.vocab_size = get_dummy_dataloader(
+            train_loader, self.vocab_size, self.vocab_mappings = get_dummy_dataloader(
                 num_samples=self.args.num_train_samples,
                 seq_len=self.args.seq_len,
                 batch_size=self.args.batch_size,
                 vocab_size=self.args.vocab_size,
                 shuffle=True,
             )
-            val_loader, _ = get_dummy_dataloader(
+            val_loader, _, _ = get_dummy_dataloader(
                 num_samples=self.args.num_val_samples,
                 seq_len=self.args.seq_len,
                 batch_size=self.args.batch_size,
@@ -145,37 +148,45 @@ class Trainer:
                 shuffle=False,
             )
         else:
-            self.log("Loading WikiText-2 dataset...")
-            train_dataset = get_wikitext2_dataloader(
-                split="train",
-                seq_len=self.args.seq_len,
-                batch_size=self.args.batch_size,
-                vocab_size=self.args.vocab_size,
-                max_samples=self.args.num_train_samples,
-                shuffle=True,
-            )
-            train_loader, self.vocab_size = train_dataset
-            
-            val_dataset = get_wikitext2_dataloader(
-                split="validation",
-                seq_len=self.args.seq_len,
-                batch_size=self.args.batch_size,
-                vocab_size=self.args.vocab_size,
-                max_samples=self.args.num_val_samples,
-                shuffle=False,
-            )
-            val_loader, _ = val_dataset
-
-            # Vocab mappings are less relevant with fallback strategy
-            # but we can note them if needed
-            self.vocab_mappings = {
-                "word2id": {},
-                "id2word": {},
-            }
+            tokenization = "char-level" if self.args.use_char_level else "word-level"
+            self.log(f"Loading WikiText-2 dataset ({tokenization})...")
+            if self.args.use_char_level:
+                train_loader, self.vocab_size, self.vocab_mappings = get_wikitext2_char_dataloader(
+                    split="train",
+                    seq_len=self.args.seq_len,
+                    batch_size=self.args.batch_size,
+                    max_samples=self.args.num_train_samples,
+                    shuffle=True,
+                )
+                val_loader, _, _ = get_wikitext2_char_dataloader(
+                    split="validation",
+                    seq_len=self.args.seq_len,
+                    batch_size=self.args.batch_size,
+                    max_samples=self.args.num_val_samples,
+                    shuffle=False,
+                )
+            else:
+                train_loader, self.vocab_size, self.vocab_mappings = get_wikitext2_dataloader(
+                    split="train",
+                    seq_len=self.args.seq_len,
+                    batch_size=self.args.batch_size,
+                    vocab_size=self.args.vocab_size,
+                    max_samples=self.args.num_train_samples,
+                    shuffle=True,
+                )
+                val_loader, _, _ = get_wikitext2_dataloader(
+                    split="validation",
+                    seq_len=self.args.seq_len,
+                    batch_size=self.args.batch_size,
+                    vocab_size=self.args.vocab_size,
+                    max_samples=self.args.num_val_samples,
+                    shuffle=False,
+                )
 
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.log(f"Vocab size: {self.vocab_size}")
+        self.log(f"Tokenization: {self.vocab_mappings.get('tokenization', 'unknown')}")
         self.log(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
 
     def _count_params(self) -> int:
@@ -348,7 +359,7 @@ def main(argv=None):
     parser.add_argument("--K-pcn", type=int, default=2, help="PCN refinement steps")
     parser.add_argument("--alpha-pcn", type=float, default=0.1, help="PCN step size")
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--use-memory", action="store_true", default=True)
+    parser.add_argument("--use-memory", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--episodic-memory-size", type=int, default=64)
     parser.add_argument("--semantic-slots", type=int, default=32)
     

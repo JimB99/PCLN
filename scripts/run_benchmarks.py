@@ -39,12 +39,14 @@ EXPERIMENTS = {
             "d_model": 256,
             "seq_len": 64,
             "learning_rate": 0.001,
+            "num_train_samples": 1000,
+            "num_val_samples": 100,
             "save_dir": "./results/exp1_baseline"
         }
     },
     "exp2_char_level": {
         "name": "Character-Level Tokenization",
-        "description": "Character-level encoding (57-char vocab) + dense neurons",
+        "description": "WikiText-2 with character-level encoding via get_wikitext2_char_dataloader",
         "config": {
             "dataset": "wikitext2",
             "use_char_level": True,
@@ -55,6 +57,8 @@ EXPERIMENTS = {
             "d_model": 256,
             "seq_len": 64,
             "learning_rate": 0.001,
+            "num_train_samples": 1000,
+            "num_val_samples": 100,
             "save_dir": "./results/exp2_char_level"
         }
     },
@@ -73,12 +77,14 @@ EXPERIMENTS = {
             "d_model": 256,
             "seq_len": 64,
             "learning_rate": 0.001,
+            "num_train_samples": 1000,
+            "num_val_samples": 100,
             "save_dir": "./results/exp3_dynamic_neurons"
         }
     },
     "exp4_all_features": {
         "name": "All Features Combined",
-        "description": "Character-level + dynamic neurons + sparse MoE + memory",
+        "description": "Char-level WikiText-2 + dynamic neurons + sparse MoE (sequential PCN blocks)",
         "config": {
             "dataset": "wikitext2",
             "use_char_level": True,
@@ -93,6 +99,8 @@ EXPERIMENTS = {
             "d_model": 256,
             "seq_len": 64,
             "learning_rate": 0.001,
+            "num_train_samples": 1000,
+            "num_val_samples": 100,
             "save_dir": "./results/exp4_all_features"
         }
     }
@@ -116,6 +124,10 @@ def build_cli_args(config):
         elif key == "use_sparse_moe":
             if value:
                 args.append("--use-sparse-moe")
+        elif key == "num_train_samples":
+            args.extend(["--num-train-samples", str(value)])
+        elif key == "num_val_samples":
+            args.extend(["--num-val-samples", str(value)])
         elif key == "dataset":
             args.extend(["--dataset", str(value)])
         elif key == "epochs":

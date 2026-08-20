@@ -1,0 +1,42 @@
+---
+description: PCLN project context, architecture, and entry points
+alwaysApply: true
+---
+
+# PCLN context
+
+Predictive Coding Language Model: Transformer encoder, PCN refinement blocks, memory, decoder.
+
+## Vision
+
+Text-to-text LM with belief refinement, explicit memory, and sparse modular structure — alternative to standard dense LLMs at research scale.
+
+## Entry points
+
+- Training: `scripts/train_full.py`
+- Chat: `scripts/chat.py`
+- Benchmarks: `scripts/run_benchmarks.py`, `scripts/analyze_benchmarks.py`
+- Tests: `pytest tests/`
+
+## Environment
+
+- Python 3.10+
+- PyTorch installed separately (CPU or CUDA) — see `docs/SETUP.md`
+- Activate `PCLN/.venv` before running scripts
+
+## Phase status
+
+- Phases 1–3: complete
+- Phase 4: code complete; prior benchmark numbers invalidated (char-level + exp4 bugs fixed Aug 2026)
+- Phase 5: scaling and publication — pending GPU benchmark rerun
+
+## GPU work
+
+Human checklist: `docs/GPU_NEXT_STEPS.md`. Run full benchmarks on NVIDIA GPU only.
+
+## Architecture flags
+
+- `--use-char-level` works with `--dataset wikitext2` and `--data-file`
+- `--use-dynamic-neurons` and `--use-sparse-moe` combine as sequential PCN blocks
+- Checkpoints must include `vocab_mappings` for chat
+- Data loaders return `(DataLoader, vocab_size, vocab_mappings)`

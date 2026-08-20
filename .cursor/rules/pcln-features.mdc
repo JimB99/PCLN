@@ -1,0 +1,39 @@
+---
+description: PCLN Phase 4 implementation map and technical notes
+globs: "src/**/*.py"
+alwaysApply: false
+---
+
+# PCLN Phase 4 implementation
+
+## Key files
+
+| Feature | File |
+|---------|------|
+| Dynamic neurons | `src/model/dynamic_neurons.py` — `DynamicNeuronLayer`, `DynamicNeuronBlock` |
+| Char tokenization | `src/data/__init__.py` — `CharLevelDataset`, `get_wikitext2_char_dataloader` |
+| WikiText download | `src/data/__init__.py` — `download_wikitext2_direct`, `resolve_wikitext2_text_file` |
+| Composable PCN blocks | `src/model/pcn_model.py` — dynamic + MoE stack when both flags set |
+| Training CLI | `scripts/train_full.py` |
+| Benchmarks | `scripts/run_benchmarks.py` — exp1–4 configs |
+
+## Data loader contract
+
+All `get_*_dataloader` helpers return `(DataLoader, vocab_size, vocab_mappings)`.
+
+`vocab_mappings` must include `tokenization`: `"word"`, `"char"`, or `"dummy"`.
+
+## Known limitations
+
+- `DynamicNeuronLayer`: computes all neurons, selects top-k (routing sparse, not FLOP sparse)
+- `SparseMoEPCNBlock`: Python loops over `seq_len` — slow at scale
+- Default training uses last-token logits vs single target per batch (by design in `train_full.py`)
+
+## Benchmark experiments
+
+- exp1: word-level baseline
+- exp2: char-level WikiText-2
+- exp3: dynamic neurons, word-level
+- exp4: char + dynamic + MoE (two sequential PCN blocks)
+
+Prior Feb 2026 results invalid — rerun per `docs/GPU_NEXT_STEPS.md`.

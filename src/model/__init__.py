@@ -22,5 +22,6 @@ __all__ = [
     "SparseMoEPCNBlock",
     "ExpertGate",
     "DynamicNeuronLayer",
-    "DynamicNeuronBlock",    "PCLN",
+    "DynamicNeuronBlock",
+    "PCLN",
 ]

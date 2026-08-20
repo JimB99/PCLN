@@ -1,0 +1,20 @@
+---
+description: PCLN documentation placement rules
+globs: "**/*.md"
+alwaysApply: false
+---
+
+# PCLN docs
+
+## Placement
+
+| Audience | Location |
+|----------|----------|
+| Users / overview | `README.md` |
+| Install | `docs/SETUP.md` |
+| GPU benchmark checklist | `docs/GPU_NEXT_STEPS.md` |
+| Benchmark results (committed) | `docs/benchmark_summary.md` |
+| Raw experiment output | `results/` (gitignored) |
+| Agent rules | `.cursor/rules/*.mdc` |
+
+Do not recreate an `AI_NOTES/` folder or root-level dev markdown.
