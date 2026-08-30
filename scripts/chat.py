@@ -21,6 +21,34 @@ if str(ROOT) not in sys.path:
 
 from src.model import PCLN
 
+DEFAULT_CHECKPOINT = ROOT / "results" / "sprint" / "wiki_stride64" / "best_model.pt"
+FALLBACK_CHECKPOINT = ROOT / "results" / "sprint" / "wiki_baseline" / "best_model.pt"
+
+
+def _default_checkpoint_path() -> Path:
+    if DEFAULT_CHECKPOINT.exists():
+        return DEFAULT_CHECKPOINT
+    if FALLBACK_CHECKPOINT.exists():
+        return FALLBACK_CHECKPOINT
+    return ROOT / "checkpoints" / "best_model.pt"
+
+
+def _chat_unavailable_message(checkpoint: Path) -> str:
+    lines = [
+        "This checkpoint cannot chat in natural language.",
+        f"  Path: {checkpoint}",
+        "",
+        "Common causes:",
+        "  - Trained with --dataset dummy (Quick Start smoke test only)",
+        "  - Missing vocab_mappings in the checkpoint file",
+        "",
+        "Use a text-trained model, for example:",
+        f"  python scripts/chat.py --checkpoint {DEFAULT_CHECKPOINT}",
+        f"  python scripts/chat.py --checkpoint {FALLBACK_CHECKPOINT}",
+        f"  python scripts/chat.py --checkpoint results/sprint/shakespeare_char/best_model.pt",
+    ]
+    return "\n".join(lines)
+
 
 def _apply_repetition_penalty(
     logits: torch.Tensor,
@@ -67,6 +95,10 @@ class ChatBot:
         learn_on_chat: bool = False,
         learn_lr: float = 1e-5,
         save_on_exit: bool = True,
+        decode_temperature: float = 0.75,
+        decode_top_k: int = 40,
+        decode_repetition_penalty: float = 1.25,
+        decode_no_repeat_ngram_size: int = 3,
     ):
         self.device = torch.device(device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
         self.checkpoint_path = Path(checkpoint_path)
@@ -74,6 +106,10 @@ class ChatBot:
         self.learn_on_chat = learn_on_chat
         self.learn_lr = learn_lr
         self.save_on_exit = save_on_exit
+        self.decode_temperature = decode_temperature
+        self.decode_top_k = decode_top_k
+        self.decode_repetition_penalty = decode_repetition_penalty
+        self.decode_no_repeat_ngram_size = decode_no_repeat_ngram_size
         self.session_turns: list[tuple[str, str]] = []
 
         print(f"Device: {self.device}")
@@ -97,7 +133,11 @@ class ChatBot:
             self.text_mode = False
         else:
             self.tokenization = self.vocab_mappings.get("tokenization", "word")
-            if self.tokenization == "char":
+            if self.tokenization == "dummy":
+                print("WARNING: Checkpoint was trained on the dummy dataset (random tokens).")
+                print("   Use a WikiText or Shakespeare checkpoint for text chat.")
+                self.text_mode = False
+            elif self.tokenization == "char":
                 self.char2id = self.vocab_mappings.get("char2id", {})
                 raw_id2char = self.vocab_mappings.get("id2char", {})
                 self.id2char = {int(k): v for k, v in raw_id2char.items()}
@@ -214,7 +254,10 @@ class ChatBot:
                 logits[logits < v[:, [-1]]] = float("-inf")
 
             probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
+            if not torch.isfinite(probs).all() or probs.sum() <= 0:
+                next_token = torch.argmax(logits, dim=-1, keepdim=True)
+            else:
+                next_token = torch.multinomial(probs, num_samples=1)
             tid = next_token.item()
             generated.append(tid)
             history.append(tid)
@@ -263,9 +306,10 @@ class ChatBot:
         generated = self.generate(
             prompt_tokens,
             max_len=max_len,
-            temperature=0.75,
-            top_k=40,
-            repetition_penalty=1.25,
+            temperature=self.decode_temperature,
+            top_k=self.decode_top_k,
+            repetition_penalty=self.decode_repetition_penalty,
+            no_repeat_ngram_size=self.decode_no_repeat_ngram_size,
             store_memory=store,
         )
         reply = self.decode_tokens(generated)
@@ -345,7 +389,12 @@ class ChatBot:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Text-based chat with PCLN")
-    parser.add_argument("--checkpoint", type=str, default="./checkpoints/best_model.pt")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to best_model.pt (default: sprint wiki_stride64 if present)",
+    )
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "cpu"])
     parser.add_argument("--prompt", type=str, default=None, help="Single prompt (non-interactive)")
     parser.add_argument("--max-len", type=int, default=40)
@@ -372,18 +421,31 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
-    checkpoint_path = Path(args.checkpoint)
+    checkpoint_path = Path(args.checkpoint) if args.checkpoint else _default_checkpoint_path()
     if not checkpoint_path.exists():
         print(f"Error: checkpoint not found at {checkpoint_path}")
-        return
+        print("\nAvailable sprint checkpoints:")
+        sprint = ROOT / "results" / "sprint"
+        if sprint.exists():
+            for pt in sorted(sprint.glob("*/best_model.pt")):
+                print(f"  {pt}")
+        return 1
 
     chatbot = ChatBot(
-        args.checkpoint,
+        args.checkpoint if args.checkpoint else str(checkpoint_path),
         device=args.device,
         use_session_memory=not args.no_session_memory,
         learn_on_chat=args.learn_on_chat,
         learn_lr=args.learn_lr,
+        decode_temperature=args.temperature,
+        decode_top_k=args.top_k,
+        decode_repetition_penalty=args.repetition_penalty,
+        decode_no_repeat_ngram_size=args.no_repeat_ngram_size,
     )
+
+    if not chatbot.text_mode:
+        print(_chat_unavailable_message(checkpoint_path))
+        return 1
 
     if args.prompt:
         prompt_tokens = chatbot.encode_text(args.prompt)

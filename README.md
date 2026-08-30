@@ -26,8 +26,17 @@ python scripts/train_full.py --dataset dummy --epochs 1 --batch-size 8
 
 ### Chat with a trained model
 
+The Quick Start dummy run (`checkpoints/best_model.pt`) is **not** for text chat — it has no vocabulary.
+
 ```bash
-python scripts/chat.py --checkpoint ./checkpoints/best_model.pt --repetition-penalty 1.35 --no-repeat-ngram-size 3
+python scripts/chat.py
+```
+
+Defaults to `results/sprint/wiki_stride64/best_model.pt` when present. Or specify explicitly:
+
+```bash
+python scripts/chat.py --checkpoint results/sprint/wiki_stride64/best_model.pt \
+  --repetition-penalty 1.35 --no-repeat-ngram-size 3
 ```
 
 ```bash
