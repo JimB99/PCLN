@@ -139,6 +139,7 @@ class PCLN(nn.Module):
         tokens: torch.Tensor,
         mask: torch.Tensor | None = None,
         return_errors: bool = False,
+        store_memory: bool = False,
     ) -> dict:
         """Forward pass through PCLN.
         
@@ -178,7 +179,7 @@ class PCLN(nn.Module):
         # Step 3: Memory retrieval (optional)
         memory = None
         if self.use_memory:
-            memory = self.memory(latent, store=self.training)  # (batch, 2, d_model)
+            memory = self.memory(latent, store=store_memory or self.training)
 
         # Step 4: Decode
         logits = self.decoder(latent, memory=memory)  # (batch, seq_len, vocab_size)

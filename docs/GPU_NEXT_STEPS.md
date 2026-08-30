@@ -39,6 +39,10 @@ python scripts/analyze_benchmarks.py --results-dir results
 python scripts/exp3_neuron_analysis.py --checkpoint results/exp3_dynamic_neurons/best_model.pt
 ```
 
+On **GTX 1650 (4 GB VRAM)** the script auto-enables low-VRAM mode: exp3/exp4 use 128 neurons instead of 512 (512-neuron models are ~1.5 GB per checkpoint and can crash the machine). Force with `--low-vram` or disable with `--no-low-vram`.
+
+WikiText-2 is downloaded from HuggingFace parquet shards into `data/wikitext2/` on first run.
+
 Experiments (8 epochs each, 1000 train samples):
 
 | ID | Config |

@@ -17,6 +17,7 @@ import sys
 import subprocess
 import json
 import time
+import copy
 from datetime import datetime
 from pathlib import Path
 import argparse
@@ -105,6 +106,29 @@ EXPERIMENTS = {
         }
     }
 }
+
+
+LOW_VRAM_NEURON_CONFIG = {"num_neurons": 128, "top_k_neurons": 32}
+LOW_VRAM_VRAM_BYTES = 6 * 1024 ** 3
+
+
+def detect_low_vram() -> bool:
+    """True on GPUs with <6 GB VRAM (e.g. GTX 1650)."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_properties(0).total_memory < LOW_VRAM_VRAM_BYTES
+    except Exception:
+        pass
+    return False
+
+
+def apply_low_vram_settings(experiments: dict) -> None:
+    """Shrink dynamic-neuron experiments so they fit 4 GB GPUs."""
+    for key in ("exp3_dynamic_neurons", "exp4_all_features"):
+        if key in experiments:
+            experiments[key]["config"].update(LOW_VRAM_NEURON_CONFIG)
 
 
 def build_cli_args(config):
@@ -300,8 +324,24 @@ def main():
         type=str,
         help="Continue from a specific experiment (skip previous ones)"
     )
-    
+    parser.add_argument(
+        "--low-vram",
+        action="store_true",
+        help="Use 128 neurons for exp3/exp4 (required on GTX 1650 4GB)"
+    )
+    parser.add_argument(
+        "--no-low-vram",
+        action="store_true",
+        help="Disable auto low-VRAM detection"
+    )
+
     args = parser.parse_args()
+
+    low_vram = args.low_vram or (not args.no_low_vram and detect_low_vram())
+    active_experiments = copy.deepcopy(EXPERIMENTS)
+    if low_vram:
+        apply_low_vram_settings(active_experiments)
+        print("Low VRAM mode: exp3/exp4 use num_neurons=128, top_k_neurons=32")
     
     # Setup logging
     log_dir = Path("results")
@@ -321,7 +361,8 @@ def main():
         f.write(f"Configuration:\n")
         f.write(f"  Experiments: {args.experiments}\n")
         f.write(f"  Skip data prep: {args.skip_data_prep}\n")
-        f.write(f"  Continue from: {args.continue_from}\n\n")
+        f.write(f"  Continue from: {args.continue_from}\n")
+        f.write(f"  Low VRAM mode: {low_vram}\n\n")
     
     # Determine which experiments to run
     if args.experiments == "all":
@@ -348,11 +389,11 @@ def main():
     
     try:
         for exp_key in exp_keys:
-            if exp_key not in EXPERIMENTS:
+            if exp_key not in active_experiments:
                 print(f"Warning: Unknown experiment '{exp_key}', skipping")
                 continue
-            
-            result = run_experiment(exp_key, EXPERIMENTS[exp_key], log_file)
+
+            result = run_experiment(exp_key, active_experiments[exp_key], log_file)
             results.append(result)
             
             # Print interim summary

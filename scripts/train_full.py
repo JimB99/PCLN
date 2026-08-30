@@ -32,6 +32,11 @@ from src.data import (
 )
 
 
+def _resolve_max_samples(n: int) -> int | None:
+    """0 or negative means use all available sequences."""
+    return None if n <= 0 else n
+
+
 class Trainer:
     """Training harness for PCLN."""
 
@@ -88,6 +93,19 @@ class Trainer:
         # State
         self.step = 0
         self.epoch = 0
+        self.best_val_loss = float("inf")
+
+        if getattr(args, "resume", False):
+            self._load_resume_checkpoint()
+
+    def _compute_main_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Next-token loss at every position (or legacy single-target batches)."""
+        if targets.dim() == 1:
+            return self.criterion(logits[:, -1, :], targets)
+        return self.criterion(
+            logits.reshape(-1, logits.size(-1)),
+            targets.reshape(-1),
+        )
 
     def _load_data(self):
         """Load training and validation data."""
@@ -104,15 +122,18 @@ class Trainer:
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
-                    max_samples=self.args.num_train_samples,
+                    max_samples=_resolve_max_samples(self.args.num_train_samples),
                     shuffle=True,
+                    chunk_stride=self.args.chunk_stride,
                 )
                 val_loader, _, _ = get_char_level_dataloader(
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
-                    max_samples=self.args.num_val_samples,
+                    max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
+                    char2id=self.vocab_mappings.get("char2id"),
+                    chunk_stride=self.args.chunk_stride,
                 )
             else:
                 train_loader, self.vocab_size, self.vocab_mappings = get_text_file_dataloader(
@@ -120,16 +141,19 @@ class Trainer:
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
                     vocab_size=self.args.vocab_size,
-                    max_samples=self.args.num_train_samples,
+                    max_samples=_resolve_max_samples(self.args.num_train_samples),
                     shuffle=True,
+                    chunk_stride=self.args.chunk_stride,
                 )
                 val_loader, _, _ = get_text_file_dataloader(
                     file_path=self.args.data_file,
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
                     vocab_size=self.args.vocab_size,
-                    max_samples=self.args.num_val_samples,
+                    max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
+                    word2id=self.vocab_mappings.get("word2id"),
+                    chunk_stride=self.args.chunk_stride,
                 )
         elif self.args.dataset == "dummy":
             self.log("Loading dummy dataset...")
@@ -155,15 +179,18 @@ class Trainer:
                     split="train",
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
-                    max_samples=self.args.num_train_samples,
+                    max_samples=_resolve_max_samples(self.args.num_train_samples),
                     shuffle=True,
+                    chunk_stride=self.args.chunk_stride,
                 )
                 val_loader, _, _ = get_wikitext2_char_dataloader(
                     split="validation",
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
-                    max_samples=self.args.num_val_samples,
+                    max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
+                    char2id=self.vocab_mappings.get("char2id"),
+                    chunk_stride=self.args.chunk_stride,
                 )
             else:
                 train_loader, self.vocab_size, self.vocab_mappings = get_wikitext2_dataloader(
@@ -171,16 +198,19 @@ class Trainer:
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
                     vocab_size=self.args.vocab_size,
-                    max_samples=self.args.num_train_samples,
+                    max_samples=_resolve_max_samples(self.args.num_train_samples),
                     shuffle=True,
+                    chunk_stride=self.args.chunk_stride,
                 )
                 val_loader, _, _ = get_wikitext2_dataloader(
                     split="validation",
                     seq_len=self.args.seq_len,
                     batch_size=self.args.batch_size,
                     vocab_size=self.args.vocab_size,
-                    max_samples=self.args.num_val_samples,
+                    max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
+                    word2id=self.vocab_mappings.get("word2id"),
+                    chunk_stride=self.args.chunk_stride,
                 )
 
         self.train_loader = train_loader
@@ -191,6 +221,51 @@ class Trainer:
 
     def _count_params(self) -> int:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+
+    def _load_resume_checkpoint(self):
+        """Load best or latest checkpoint and continue from the next epoch."""
+        best_path = self.checkpoint_dir / "best_model.pt"
+        candidates = list(self.checkpoint_dir.glob("checkpoint_epoch*.pt"))
+
+        path = None
+        best_epoch = -1
+        if best_path.exists():
+            ck_meta = torch.load(best_path, map_location="cpu", weights_only=False)
+            best_epoch = ck_meta.get("epoch", -1)
+            path = best_path
+
+        for candidate in candidates:
+            epoch_num = int(candidate.stem.replace("checkpoint_epoch", ""))
+            if epoch_num > best_epoch:
+                best_epoch = epoch_num
+                path = candidate
+
+        if path is None:
+            self.log("Resume requested but no checkpoint found; starting fresh.")
+            return
+
+        ck = torch.load(path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(ck["model_state"])
+        if "optimizer_state" in ck:
+            try:
+                self.optimizer.load_state_dict(ck["optimizer_state"])
+            except Exception as e:
+                self.log(f"Could not load optimizer state: {e}")
+        self.epoch = ck.get("epoch", -1) + 1
+        self.step = ck.get("step", 0)
+        self.best_val_loss = ck.get("best_val_loss", float("inf"))
+        if self.best_val_loss == float("inf") and self.log_file.exists():
+            import re
+            matches = re.findall(
+                r"val_loss=([\d.]+)",
+                self.log_file.read_text(encoding="utf-8", errors="ignore"),
+            )
+            if matches:
+                self.best_val_loss = min(float(x) for x in matches)
+        self.log(
+            f"Resumed from {path.name} -> starting at epoch {self.epoch + 1}/{self.args.epochs} "
+            f"(best val {self.best_val_loss:.4f})"
+        )
 
     def log(self, msg: str):
         """Log message to console and file."""
@@ -218,11 +293,8 @@ class Trainer:
             errors = output["errors"]
             load_balance_loss = output["load_balance_loss"]
 
-            # Main loss: next-token prediction
-            # Targets shape is (batch,), need to match with logits shape
-            # Use the last token's logits for prediction
-            logits_last = logits[:, -1, :]  # (batch, vocab_size)
-            loss_main = self.criterion(logits_last, targets)
+            # Main loss: next-token prediction at each position
+            loss_main = self._compute_main_loss(logits, targets)
 
             # Auxiliary loss: minimize PCN prediction errors
             loss_error = 0.0
@@ -274,9 +346,7 @@ class Trainer:
             output = self.model(tokens, return_errors=False)
             logits = output["logits"]  # (batch, seq_len, vocab_size)
 
-            # Use last token logits for prediction
-            logits_last = logits[:, -1, :]  # (batch, vocab_size)
-            loss = self.criterion(logits_last, targets)
+            loss = self._compute_main_loss(logits, targets)
 
             total_loss += loss.item()
             num_batches += 1
@@ -292,12 +362,14 @@ class Trainer:
             "model_state": self.model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
             "args": self.args,
-            "vocab_mappings": self.vocab_mappings,  # Include vocab for text-based chat
+            "vocab_mappings": self.vocab_mappings,
+            "best_val_loss": self.best_val_loss,
         }
 
-        ckpt_path = self.checkpoint_dir / f"checkpoint_epoch{self.epoch}.pt"
-        torch.save(checkpoint, ckpt_path)
-        self.log(f"Saved checkpoint: {ckpt_path}")
+        if getattr(self.args, "save_epoch_checkpoints", False):
+            ckpt_path = self.checkpoint_dir / f"checkpoint_epoch{self.epoch}.pt"
+            torch.save(checkpoint, ckpt_path)
+            self.log(f"Saved checkpoint: {ckpt_path}")
 
         if is_best:
             best_path = self.checkpoint_dir / "best_model.pt"
@@ -306,9 +378,7 @@ class Trainer:
 
     def train(self):
         """Main training loop."""
-        best_val_loss = float("inf")
-
-        for epoch in range(self.args.epochs):
+        for epoch in range(self.epoch, self.args.epochs):
             self.epoch = epoch
             self.log(f"\n--- Epoch {epoch+1}/{self.args.epochs} ---")
 
@@ -328,14 +398,14 @@ class Trainer:
             )
 
             # Save checkpoint
-            is_best = val_loss < best_val_loss
+            is_best = val_loss < self.best_val_loss
             if is_best:
-                best_val_loss = val_loss
+                self.best_val_loss = val_loss
             self.save_checkpoint(is_best=is_best)
 
         self.log("\n" + "=" * 80)
         self.log(f"Training completed at {datetime.now().isoformat()}")
-        self.log(f"Best val loss: {best_val_loss:.4f}")
+        self.log(f"Best val loss: {self.best_val_loss:.4f}")
 
 
 def main(argv=None):
@@ -345,9 +415,17 @@ def main(argv=None):
     parser.add_argument("--dataset", default="dummy", choices=["dummy", "wikitext2"])
     parser.add_argument("--use-char-level", action="store_true", default=False, help="Use character-level tokenization instead of word-level")
     parser.add_argument("--data-file", type=str, default=None, help="Path to custom text file (if provided, overrides dataset)")
-    parser.add_argument("--num-train-samples", type=int, default=1000)
-    parser.add_argument("--num-val-samples", type=int, default=100)
+    parser.add_argument("--num-train-samples", type=int, default=1000,
+                        help="Max train sequences; 0 = use all available")
+    parser.add_argument("--num-val-samples", type=int, default=100,
+                        help="Max val sequences; 0 = use all available")
     parser.add_argument("--seq-len", type=int, default=64)
+    parser.add_argument(
+        "--chunk-stride",
+        type=int,
+        default=None,
+        help="Token stride between training chunks; default seq_len (no overlap). Use seq_len/2 for overlap.",
+    )
     parser.add_argument("--vocab-size", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=16)
     
@@ -372,6 +450,16 @@ def main(argv=None):
     parser.add_argument("--lambda-moe", type=float, default=0.1, help="Weight for MoE load-balance loss")
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--checkpoint-dir", default="./checkpoints")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from best_model.pt or latest checkpoint_epoch*.pt in checkpoint-dir",
+    )
+    parser.add_argument(
+        "--save-epoch-checkpoints",
+        action="store_true",
+        help="Save checkpoint_epochN.pt each epoch (uses more disk; default: best only)",
+    )
     
     # Sparse MoE
     parser.add_argument("--use-sparse-moe", action="store_true", default=False, help="Use Sparse MoE PCN blocks")

@@ -36,14 +36,23 @@ def load_state_dict(path):
             # Re-raise the original error if fallback fails
             raise
     if isinstance(ck, dict):
-        # Common key names
-        for k in ('state_dict', 'model_state_dict', 'model'):
+        for k in ('state_dict', 'model_state_dict', 'model', 'model_state'):
             if k in ck and isinstance(ck[k], dict):
                 return ck[k]
         # Otherwise assume ck itself is a state dict
         return ck
     else:
         return ck
+
+
+def infer_num_neurons(state_dict, default: int = 256) -> int:
+    """Infer neuron count from gate output layers in the checkpoint."""
+    for name, tensor in state_dict.items():
+        if not hasattr(tensor, 'shape'):
+            continue
+        if name.endswith('.gate.2.weight') and len(tensor.shape) == 2:
+            return int(tensor.shape[0])
+    return default
 
 
 def find_candidate_tensors(state_dict):
@@ -119,7 +128,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkpoint', type=str, default='results/exp3_dynamic_neurons/best_model.pt')
     parser.add_argument('--outdir', type=str, default='results/exp3_analysis')
-    parser.add_argument('--num_neurons', type=int, default=256)
+    parser.add_argument('--num_neurons', type=int, default=None,
+                        help='Neuron count (auto-detected from checkpoint if omitted)')
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -128,13 +138,16 @@ def main():
     state = load_state_dict(args.checkpoint)
     print('Loaded, {} tensors'.format(len(state)))
 
+    num_neurons = args.num_neurons or infer_num_neurons(state)
+    print('Using num_neurons={}'.format(num_neurons))
+
     candidates = find_candidate_tensors(state)
     print('Found {} candidate tensors'.format(len(candidates)))
 
     reports = []
     for name, arr in candidates.items():
         try:
-            report = analyze_tensor(name, arr, args.outdir, default_num_neurons=args.num_neurons)
+            report = analyze_tensor(name, arr, args.outdir, default_num_neurons=num_neurons)
             if report is not None:
                 reports.append(report)
         except Exception as e:

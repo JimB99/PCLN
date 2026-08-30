@@ -27,7 +27,11 @@ python scripts/train_full.py --dataset dummy --epochs 1 --batch-size 8
 ### Chat with a trained model
 
 ```bash
-python scripts/chat.py --checkpoint ./checkpoints/best_model.pt
+python scripts/chat.py --checkpoint ./checkpoints/best_model.pt --repetition-penalty 1.35 --no-repeat-ngram-size 3
+```
+
+```bash
+python scripts/eval_perplexity.py --checkpoint results/sprint/wiki_baseline/best_model.pt --split test
 ```
 
 Checkpoints must be trained with real text data (not dummy) and include vocab mappings.
@@ -37,6 +41,12 @@ Checkpoints must be trained with real text data (not dummy) and include vocab ma
 ```bash
 # WikiText-2 word-level
 python scripts/train_full.py --dataset wikitext2 --epochs 8
+
+# Overlapping chunks (2x training signal per token)
+python scripts/train_full.py --dataset wikitext2 --chunk-stride 64 --seq-len 128 --epochs 8
+
+# Multi-hour GPU camp (resume + chat samples)
+python scripts/run_training_camp.py --max-hours 6 --resume-all
 
 # WikiText-2 character-level
 python scripts/train_full.py --dataset wikitext2 --use-char-level --epochs 8
@@ -111,6 +121,8 @@ docs/                # SETUP.md, GPU_NEXT_STEPS.md, benchmark_summary.md
 
 ## Benchmarks
 
+See **[docs/PCLN_METHOD.md](docs/PCLN_METHOD.md)** for architecture vs standard LLMs, memory, and online learning.
+
 **On GPU laptop:** follow **[docs/GPU_NEXT_STEPS.md](docs/GPU_NEXT_STEPS.md)** after syncing.
 
 Prior Feb 2026 results are invalid. Record new results in [docs/benchmark_summary.md](docs/benchmark_summary.md).
@@ -122,7 +134,7 @@ Prior Feb 2026 results are invalid. Record new results in [docs/benchmark_summar
 | Phase | Status |
 |-------|--------|
 | 1–3 | Complete (PCN, memory, MoE) |
-| 4 | Code complete; benchmarks pending GPU rerun |
+| 4 | Code complete; Phase 5 sprint + improvement session (see `docs/SPRINT_RESULTS.md`, `docs/IMPROVEMENT_SESSION.md`) |
 | 5 | Scaling and publication — after valid benchmarks |
 
 ---
