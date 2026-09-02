@@ -37,6 +37,7 @@ Human checklist: `docs/GPU_NEXT_STEPS.md`. Run full benchmarks on NVIDIA GPU onl
 ## Architecture flags
 
 - `--use-char-level` works with `--dataset wikitext2` and `--data-file`
-- `--use-dynamic-neurons` and `--use-sparse-moe` combine as sequential PCN blocks
+- `--use-dynamic-neurons`, `--use-sparse-moe`, `--use-temporal-pcn`, `--use-hierarchical-pcn` compose as sequential PCN blocks
+- New training defaults: causal encoder, tied embeddings, per-token memory
 - Checkpoints must include `vocab_mappings` for chat
 - Data loaders return `(DataLoader, vocab_size, vocab_mappings)`

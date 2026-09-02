@@ -91,19 +91,37 @@ Automatic fallback chain: Salesforce HF CDN → S3 zip → Tiny Shakespeare. No 
 
 ### Combined flags
 
-`--use-dynamic-neurons` and `--use-sparse-moe` stack as **sequential PCN blocks** (dynamic first, then MoE).
+`--use-dynamic-neurons` and `--use-sparse-moe` stack as **sequential PCN blocks** (dynamic first, then MoE). Combine with `--use-temporal-pcn` / `--use-hierarchical-pcn` the same way.
 
 ### Known limitations
 
-- Dynamic neurons still compute all neuron outputs then gather top-k (sparse routing, not sparse FLOPs).
-- Sparse MoE uses Python loops over sequence length (research-scale only).
+- Dynamic neurons: output path is top-k / rank-1; the gate still scores all neurons.
+- Sparse MoE loops over the expert count (small), not sequence length.
+- Old sprint checkpoints were trained **non-causal**; `chat.py` / `eval_perplexity.py` keep that behavior unless the checkpoint args say otherwise.
 
 ---
 
 ## Architecture
 
 ```
-Input Tokens → Encoder → PCN Blocks → Memory → Decoder → Output Tokens
+tokens → causal encoder → PCN refinement → memory → decoder → next-token logits
+```
+
+New training is a **causal** language model. Prior WikiText numbers used a bidirectional encoder with full-sequence loss, so they are not honest LM scores — retrain before comparing perplexity.
+
+**Inventions now in the code (opt-in flags):**
+- **Temporal PCN** (`--use-temporal-pcn`): predict the next latent from the previous one (not self-reconstruction)
+- **Hierarchical PCN** (`--use-hierarchical-pcn`): slow causal pooled state predicts local means
+- **Adaptive K** (`--adaptive-k`): extra refinement only while prediction error stays large
+- **Surprise-gated memory**: write episodic slots when PCN error exceeds `--surprise-store-threshold`
+- **Factorized dynamic neurons**: rank-1 units, sparse output FLOPs
+- **Vectorized MoE**: loop over experts, not sequence length
+
+Recommended first retrain:
+
+```bash
+python scripts/train_full.py --dataset wikitext2 --chunk-stride 64 --seq-len 128 \
+  --epochs 30 --use-temporal-pcn --use-hierarchical-pcn --adaptive-k --patience 6
 ```
 
 ---
@@ -143,8 +161,8 @@ Prior Feb 2026 results are invalid. Record new results in [docs/benchmark_summar
 | Phase | Status |
 |-------|--------|
 | 1–3 | Complete (PCN, memory, MoE) |
-| 4 | Code complete; Phase 5 sprint + improvement session (see `docs/SPRINT_RESULTS.md`, `docs/IMPROVEMENT_SESSION.md`) |
-| 5 | Scaling and publication — after valid benchmarks |
+| 4 | Code complete; prior WikiText scores need a **causal** retrain (see `docs/SPRINT_RESULTS.md`) |
+| 5 | Causal + temporal/hierarchical PCN in code; GPU retrain pending |
 
 ---
 

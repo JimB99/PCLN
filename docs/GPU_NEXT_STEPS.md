@@ -47,10 +47,15 @@ Experiments (8 epochs each, 1000 train samples):
 
 | ID | Config |
 |----|--------|
-| exp1_baseline | word-level WikiText-2 |
+| exp1_baseline | word-level WikiText-2 (causal encoder) |
 | exp2_char_level | char-level WikiText-2 |
-| exp3_dynamic_neurons | dynamic neurons, word-level |
+| exp3_dynamic_neurons | factorized dynamic neurons, word-level |
 | exp4_all_features | char + dynamic neurons + MoE (stacked blocks) |
+| exp5_temporal_pcn | temporal + hierarchical PCN |
+
+```bash
+python scripts/run_benchmarks.py --experiments exp5_temporal_pcn
+```
 
 Report output: `results/BENCHMARK_REPORT.md`
 

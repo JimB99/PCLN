@@ -26,14 +26,24 @@ It is trained like a language model (predict the next token), but the **internal
 
 ### Predictive coding (the main idea)
 
-In each PCN block the model:
+**Legacy self-PCN** (still the default block if no temporal flags):
 
 1. Starts from encoder output `z`
 2. Predicts `z` from itself with a small network `f(z)`
 3. Updates: `z ← z - α · (z - f(z))` for **K steps**
-4. Trains auxiliary loss to shrink prediction **errors**
 
-So the representation is **explicitly refined** toward self-consistency, not only passed through feedforward layers. That is the biological / neuroscience motivation: perception as inference, not one-shot feedforward.
+That is a denoiser. It does not predict the future.
+
+**Temporal PCN** (`--use-temporal-pcn`) — the language-appropriate generative model:
+
+1. Shift latents causally: position `t` sees `z_{t-1}` (learned start vector at `t=0`)
+2. Predict `ẑ_t = f(z_{t-1})`
+3. Error `e_t = z_t - ẑ_t`
+4. Precision-weighted update `z ← z - α · Π(e) · e`
+
+**Hierarchical PCN** (`--use-hierarchical-pcn`) adds a slower causal moving-average pathway (Rao–Ballard style): the pooled state predicts the next local mean and injects that error into tokens.
+
+The encoder is **causal** on new training runs so full-sequence next-token loss is a real language-model objective.
 
 ### Memory (episodic + semantic)
 
@@ -111,12 +121,15 @@ You cannot drop a GPT checkpoint into PCLN end-to-end because the **forward path
 
 ## Further improvements (roadmap)
 
-1. **Overlapping training chunks** (stride 1) — more supervision per token
-2. **Instruction-style fine-tuning** — prompt/response pairs, not raw LM only
-3. **Fix dynamic neuron parameterization** — true per-neuron weights, not `Linear(in, num_neurons × out)`
-4. **Retrieval-augmented episodic memory** — store text summaries, not only latent means
-5. **Larger encoder** (pretrained) + keep PCN stack small
-6. **Test perplexity** on WikiText-2 test for apples-to-apples LM comparison
+Done in the 2026-09-02 audit pass: causal encoder, value retrieval, no train-time memory writes, temporal/hierarchical PCN, factorized neurons, vectorized MoE, nucleus sampling, train/chat tokenizer alignment, early stopping.
+
+Still open:
+
+1. Instruction-style fine-tuning (prompt/response pairs)
+2. Text-backed episodic memory (store token summaries, not only latents)
+3. Pretrained encoder init (small GPT-2 / similar) + small PCN stack
+4. **Causal retrain** of WikiText so test perplexity is comparable to other LMs
+5. True continual learning (replay / EWC) for `--learn-on-chat`
 
 ## Try chat (after sprint)
 

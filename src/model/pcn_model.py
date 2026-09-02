@@ -1,6 +1,6 @@
 """Full PCLN model: Predictive Coding Language Model.
 
-Combines transformer encoder, PCN refinement, memory, and decoder.
+Pipeline: causal encoder → PCN refinement → memory → decoder.
 """
 
 from __future__ import annotations
@@ -12,41 +12,18 @@ from .encoder import TransformerEncoder
 from .pcn_layers import PCNBlock
 from .sparse_moe import SparseMoEPCNBlock
 from .dynamic_neurons import DynamicNeuronBlock
+from .temporal_pcn import HierarchicalPCNBlock, TemporalPCNBlock
 from .memory import MemoryModule
 from .decoder import MemoryAugmentedDecoder
+from .generation import (
+    apply_repetition_penalty,
+    ban_repeating_ngrams,
+    sample_next_token,
+)
 
 
 class PCLN(nn.Module):
-    """Full Predictive Coding Language Model.
-    
-    Architecture:
-    1. Token embedding → Transformer encoder (amortized inference)
-    2. PCN refinement blocks (iterative belief refinement)
-       - Standard: simple feedforward-based PCN
-       - Sparse MoE: gated expert routing with pruning
-    3. Memory retrieval (episodic + semantic)
-    4. Memory-augmented decoder
-    
-    Args:
-        vocab_size: vocabulary size.
-        d_model: embedding/latent dimension.
-        nhead: number of attention heads in encoder.
-        num_encoder_layers: number of transformer encoder layers.
-        num_pcn_blocks: number of PCN refinement blocks.
-        K_pcn: refinement steps per PCN block during training.
-        alpha_pcn: refinement step size.
-        d_ff: feedforward dimension in encoder.
-        dropout: dropout rate.
-        episodic_memory_size: max episodic memory capacity.
-        semantic_slots: number of semantic memory slots.
-        use_memory: whether to use memory module.
-        use_sparse_moe: if True, use Sparse MoE blocks instead of standard PCN.
-        use_dynamic_neurons: if True, use dynamic neuron blocks (replaces dense FC).
-        num_experts: number of experts per MoE block (if use_sparse_moe=True).
-        top_k_experts: number of experts to activate per token (if use_sparse_moe=True).
-        num_neurons: number of neurons in dynamic neuron layer (if use_dynamic_neurons=True).
-        top_k_neurons: number of neurons to activate per token (if use_dynamic_neurons=True).
-    """
+    """Predictive Coding Language Model."""
 
     def __init__(
         self,
@@ -69,6 +46,17 @@ class PCLN(nn.Module):
         num_neurons: int = 256,
         top_k_neurons: int = 32,
         max_seq_len: int = 512,
+        causal: bool = True,
+        tie_embeddings: bool = False,
+        use_temporal_pcn: bool = False,
+        use_hierarchical_pcn: bool = False,
+        adaptive_k: bool = False,
+        error_stop_threshold: float = 0.01,
+        timescale: int = 4,
+        surprise_store_threshold: float = 0.0,
+        memory_topk: int = 4,
+        pcn_residual_mode: str = "refined",
+        per_token_memory: bool = True,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -77,8 +65,13 @@ class PCLN(nn.Module):
         self.use_sparse_moe = use_sparse_moe
         self.use_dynamic_neurons = use_dynamic_neurons
         self.K_pcn = K_pcn
+        self.causal = causal
+        self.tie_embeddings = tie_embeddings
+        self.surprise_store_threshold = surprise_store_threshold
+        self.max_seq_len = max_seq_len
+        self.pcn_residual_mode = pcn_residual_mode
+        self.per_token_memory = per_token_memory
 
-        # Encoder: fast/amortized inference
         self.encoder = TransformerEncoder(
             vocab_size=vocab_size,
             d_model=d_model,
@@ -87,52 +80,87 @@ class PCLN(nn.Module):
             d_ff=d_ff,
             dropout=dropout,
             max_len=max_seq_len,
+            causal=causal,
         )
 
-        # PCN refinement blocks: composable when multiple flags are set
-        blocks: list[nn.Module] = []
+        makers: list = []
+        if use_temporal_pcn:
+            makers.append(
+                lambda: TemporalPCNBlock(
+                    d_model=d_model,
+                    K=K_pcn,
+                    alpha=alpha_pcn,
+                    adaptive_k=adaptive_k,
+                    error_stop_threshold=error_stop_threshold,
+                    dropout=dropout,
+                    residual_mode=pcn_residual_mode,
+                )
+            )
+        if use_hierarchical_pcn:
+            makers.append(
+                lambda: HierarchicalPCNBlock(
+                    d_model=d_model,
+                    timescale=timescale,
+                    K=K_pcn,
+                    alpha=alpha_pcn,
+                    dropout=dropout,
+                    residual_mode=pcn_residual_mode,
+                )
+            )
         if use_dynamic_neurons:
-            blocks.append(
-                DynamicNeuronBlock(
+            makers.append(
+                lambda: DynamicNeuronBlock(
                     d_model=d_model,
                     num_neurons=num_neurons,
                     top_k_neurons=top_k_neurons,
                     K=K_pcn,
                     alpha=alpha_pcn,
+                    residual_mode=pcn_residual_mode,
                 )
             )
         if use_sparse_moe:
-            blocks.append(
-                SparseMoEPCNBlock(
+            makers.append(
+                lambda: SparseMoEPCNBlock(
                     d_model=d_model,
                     num_experts=num_experts,
                     top_k=top_k_experts,
                     K_refine=K_pcn,
                     alpha=alpha_pcn,
+                    residual_mode=pcn_residual_mode,
                 )
             )
-        if not blocks:
+        if not makers:
             blocks = [
-                PCNBlock(d_model=d_model, K=K_pcn, alpha=alpha_pcn)
+                PCNBlock(
+                    d_model=d_model,
+                    K=K_pcn,
+                    alpha=alpha_pcn,
+                    residual_mode=pcn_residual_mode,
+                )
                 for _ in range(num_pcn_blocks)
             ]
+        elif len(makers) == 1:
+            blocks = [makers[0]() for _ in range(num_pcn_blocks)]
+        else:
+            blocks = [make() for make in makers]
         self.pcn_blocks = nn.ModuleList(blocks)
         self.num_pcn_blocks = len(blocks)
 
-        # Memory module (optional)
         if use_memory:
             self.memory = MemoryModule(
                 d_model=d_model,
                 episodic_size=episodic_memory_size,
                 semantic_slots=semantic_slots,
+                retrieve_topk=memory_topk,
             )
 
-        # Decoder
         self.decoder = MemoryAugmentedDecoder(
             d_model=d_model,
             vocab_size=vocab_size,
             use_memory_fusion=use_memory,
         )
+        if tie_embeddings:
+            self.decoder.linear.weight = self.encoder.embedding.weight
 
     def forward(
         self,
@@ -141,49 +169,38 @@ class PCLN(nn.Module):
         return_errors: bool = False,
         store_memory: bool = False,
     ) -> dict:
-        """Forward pass through PCLN.
-        
-        Args:
-            tokens: (batch, seq_len) token indices.
-            mask: (batch, seq_len) or None. 1 = attend, 0 = mask out.
-            return_errors: if True, return PCN prediction errors for auxiliary loss.
-        Returns:
-            output dict with keys:
-            - logits: (batch, seq_len, vocab_size) output logits.
-            - latent: (batch, seq_len, d_model) final refined latent state.
-            - errors: (list of tensors) PCN prediction errors if return_errors=True.
-            - load_balance_loss: weighted auxiliary loss from MoE blocks (if use_sparse_moe=True).
-        """
-        # Step 1: Encoder (fast feedforward)
-        latent = self.encoder(tokens, mask=mask)  # (batch, seq_len, d_model)
+        latent = self.encoder(tokens, mask=mask)
 
-        # Step 2: PCN refinement
         errors_all = []
-        load_balance_loss = torch.tensor(0.0, device=latent.device, dtype=latent.dtype)
+        load_balance_loss = tokens.new_zeros(())
+        load_balance_loss = load_balance_loss.to(dtype=latent.dtype)
 
         for pcn_block in self.pcn_blocks:
-            if isinstance(pcn_block, DynamicNeuronBlock):
-                latent, errors, lb_loss = pcn_block(latent, training=self.training)
+            result = pcn_block(latent, training=self.training)
+            if len(result) == 4:
+                latent, errors, lb_loss, _expert_usage = result
                 load_balance_loss = load_balance_loss + lb_loss
-                errors_all.append(errors)
-            elif isinstance(pcn_block, SparseMoEPCNBlock):
-                latent, errors, lb_loss, _expert_usage = pcn_block(
-                    latent, training=self.training
-                )
+            elif len(result) == 3:
+                latent, errors, lb_loss = result
                 load_balance_loss = load_balance_loss + lb_loss
-                errors_all.append(errors)
             else:
-                latent, errors = pcn_block(latent, training=self.training)
-                errors_all.append(errors)
+                latent, errors = result
+            errors_all.append(errors)
 
-        # Step 3: Memory retrieval (optional)
         memory = None
         if self.use_memory:
-            memory = self.memory(latent, store=store_memory or self.training)
+            surprise = None
+            if errors_all:
+                surprise = errors_all[-1].pow(2).mean()
+            mem_src = latent if self.per_token_memory else latent.mean(dim=1)
+            memory = self.memory(
+                mem_src,
+                store=store_memory,
+                surprise=surprise,
+                surprise_threshold=self.surprise_store_threshold,
+            )
 
-        # Step 4: Decode
-        logits = self.decoder(latent, memory=memory)  # (batch, seq_len, vocab_size)
-
+        logits = self.decoder(latent, memory=memory)
         output = {
             "logits": logits,
             "latent": latent,
@@ -191,46 +208,36 @@ class PCLN(nn.Module):
         }
         if return_errors:
             output["errors"] = errors_all
-
         return output
 
+    @torch.no_grad()
     def generate(
         self,
         tokens: torch.Tensor,
         max_len: int = 50,
         temperature: float = 1.0,
         top_k: int | None = None,
+        top_p: float = 1.0,
+        repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
+        store_memory: bool = False,
     ) -> torch.Tensor:
-        """Generate tokens autoregressively.
-        
-        Args:
-            tokens: (batch, seq_len) initial tokens.
-            max_len: maximum length to generate.
-            temperature: sampling temperature (higher = more random).
-            top_k: if set, use top-k sampling.
-        Returns:
-            generated: (batch, orig_len + max_len) generated sequence.
-        """
-        device = tokens.device
+        """Autoregressive generation with optional nucleus / repetition controls."""
         generated = tokens.clone()
+        history = generated[0].tolist() if generated.size(0) == 1 else []
+        max_ctx = self.encoder.pos_encoding.pe.size(1)
 
         for _ in range(max_len):
-            # Forward pass
-            output = self(generated, return_errors=False)
-            logits = output["logits"][:, -1, :]  # (batch, vocab_size)
-
-            # Apply temperature
-            logits = logits / temperature
-
-            # Top-k sampling
-            if top_k is not None:
-                v, _ = torch.topk(logits, top_k, dim=-1)
-                logits[logits < v[:, [-1]]] = float('-inf')
-
-            # Sample
-            probs = torch.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)  # (batch, 1)
-
+            ctx = generated[:, -max_ctx:]
+            logits = self(ctx, return_errors=False, store_memory=store_memory)["logits"][:, -1, :]
+            if generated.size(0) == 1:
+                logits = apply_repetition_penalty(logits, history[-32:], repetition_penalty)
+                logits = ban_repeating_ngrams(logits, history, no_repeat_ngram_size)
+            next_token = sample_next_token(
+                logits, temperature=temperature, top_k=top_k, top_p=top_p
+            )
             generated = torch.cat([generated, next_token], dim=1)
+            if generated.size(0) == 1:
+                history.append(int(next_token.item()))
 
         return generated

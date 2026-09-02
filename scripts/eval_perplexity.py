@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model import PCLN
+from src.model import PCLN, build_pcln
 from src.data import get_wikitext2_dataloader, get_wikitext2_char_dataloader, get_char_level_dataloader
 
 
@@ -24,25 +24,7 @@ def load_model(checkpoint_path: Path, device: torch.device) -> tuple[PCLN, dict]
     args = ck["args"]
     state = ck["model_state"]
     vocab_size = state["encoder.embedding.weight"].shape[0]
-    model = PCLN(
-        vocab_size=vocab_size,
-        d_model=args.d_model,
-        nhead=args.nhead,
-        num_encoder_layers=args.num_encoder_layers,
-        num_pcn_blocks=args.num_pcn_blocks,
-        K_pcn=args.K_pcn,
-        alpha_pcn=args.alpha_pcn,
-        dropout=args.dropout,
-        use_memory=args.use_memory,
-        episodic_memory_size=args.episodic_memory_size,
-        semantic_slots=args.semantic_slots,
-        use_sparse_moe=getattr(args, "use_sparse_moe", False),
-        use_dynamic_neurons=getattr(args, "use_dynamic_neurons", False),
-        num_experts=getattr(args, "num_experts", 4),
-        top_k_experts=getattr(args, "top_k_experts", 2),
-        num_neurons=getattr(args, "num_neurons", 256),
-        top_k_neurons=getattr(args, "top_k_neurons", 32),
-    ).to(device)
+    model = build_pcln(args, vocab_size, default_causal=False).to(device)
     model.load_state_dict(state)
     model.eval()
     return model, ck

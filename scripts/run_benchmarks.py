@@ -104,6 +104,28 @@ EXPERIMENTS = {
             "num_val_samples": 100,
             "save_dir": "./results/exp4_all_features"
         }
+    },
+    "exp5_temporal_pcn": {
+        "name": "Temporal + hierarchical PCN (causal LM)",
+        "description": "Word-level WikiText-2 with next-step latent PC and slow-timescale PC",
+        "config": {
+            "dataset": "wikitext2",
+            "use_char_level": False,
+            "use_dynamic_neurons": False,
+            "use_sparse_moe": False,
+            "use_temporal_pcn": True,
+            "use_hierarchical_pcn": True,
+            "adaptive_k": True,
+            "epochs": 8,
+            "batch_size": 8,
+            "d_model": 256,
+            "seq_len": 64,
+            "learning_rate": 0.001,
+            "num_train_samples": 1000,
+            "num_val_samples": 100,
+            "patience": 3,
+            "save_dir": "./results/exp5_temporal_pcn"
+        }
     }
 }
 
@@ -312,7 +334,7 @@ def main():
         "--experiments",
         type=str,
         default="all",
-        help="Experiments to run: 'all', 'exp1', 'exp2', 'exp3', 'exp4', or comma-separated"
+        help="Experiments to run: 'all', 'exp1', 'exp2', 'exp3', 'exp4', 'exp5', or comma-separated"
     )
     parser.add_argument(
         "--skip-data-prep",

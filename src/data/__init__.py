@@ -560,9 +560,8 @@ class DummyDataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        input_tokens = torch.randint(0, self.vocab_size, (self.seq_len,), dtype=torch.long)
-        target_tokens = torch.randint(0, self.vocab_size, (self.seq_len,), dtype=torch.long)
-        return input_tokens, target_tokens
+        seq = torch.randint(0, self.vocab_size, (self.seq_len + 1,), dtype=torch.long)
+        return seq[:-1], seq[1:]
 
 
 def get_dummy_dataloader(

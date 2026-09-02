@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model import PCLN
+from src.model import build_pcln
 from src.data import (
     get_dummy_dataloader,
     get_wikitext2_dataloader,
@@ -35,6 +35,13 @@ from src.data import (
 def _resolve_max_samples(n: int) -> int | None:
     """0 or negative means use all available sequences."""
     return None if n <= 0 else n
+
+
+def _should_stop_early(worse_epochs: int, patience: int) -> bool:
+    """True when validation has not improved for `patience` epochs. patience<=0 disables."""
+    if patience <= 0:
+        return False
+    return worse_epochs >= patience
 
 
 class Trainer:
@@ -56,26 +63,7 @@ class Trainer:
         # Load data
         self._load_data()
 
-        # Build model
-        self.model = PCLN(
-            vocab_size=self.vocab_size,
-            d_model=args.d_model,
-            nhead=args.nhead,
-            num_encoder_layers=args.num_encoder_layers,
-            num_pcn_blocks=args.num_pcn_blocks,
-            K_pcn=args.K_pcn,
-            alpha_pcn=args.alpha_pcn,
-            dropout=args.dropout,
-            use_memory=args.use_memory,
-            episodic_memory_size=args.episodic_memory_size,
-            semantic_slots=args.semantic_slots,
-            use_sparse_moe=args.use_sparse_moe,
-            use_dynamic_neurons=args.use_dynamic_neurons,
-            num_experts=args.num_experts,
-            top_k_experts=args.top_k_experts,
-            num_neurons=args.num_neurons,
-            top_k_neurons=args.top_k_neurons,
-        ).to(self.device)
+        self.model = build_pcln(args, self.vocab_size, default_causal=True).to(self.device)
 
         self.log(f"Model parameters: {self._count_params()}")
 
@@ -88,12 +76,15 @@ class Trainer:
         self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=args.epochs
         )
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss(
+            label_smoothing=float(getattr(args, "label_smoothing", 0.0) or 0.0)
+        )
 
         # State
         self.step = 0
         self.epoch = 0
         self.best_val_loss = float("inf")
+        self.worse_epochs = 0
 
         if getattr(args, "resume", False):
             self._load_resume_checkpoint()
@@ -401,7 +392,16 @@ class Trainer:
             is_best = val_loss < self.best_val_loss
             if is_best:
                 self.best_val_loss = val_loss
+                self.worse_epochs = 0
+            else:
+                self.worse_epochs += 1
             self.save_checkpoint(is_best=is_best)
+            if _should_stop_early(self.worse_epochs, int(getattr(self.args, "patience", 0) or 0)):
+                self.log(
+                    f"Early stopping at epoch {epoch+1} "
+                    f"(no val improvement for {self.worse_epochs} epochs)"
+                )
+                break
 
         self.log("\n" + "=" * 80)
         self.log(f"Training completed at {datetime.now().isoformat()}")
@@ -470,8 +470,42 @@ def main(argv=None):
     parser.add_argument("--use-dynamic-neurons", action="store_true", default=False, help="Use dynamic neuron PCN blocks (replaces dense FC)")
     parser.add_argument("--num-neurons", type=int, default=256, help="Number of neurons in dynamic neuron layer")
     parser.add_argument("--top-k-neurons", type=int, default=32, help="Number of neurons to activate per token")
-    
+
+    parser.add_argument("--causal", action=argparse.BooleanOptionalAction, default=True,
+                        help="Causal encoder (required for honest next-token LM)")
+    parser.add_argument("--tie-embeddings", action=argparse.BooleanOptionalAction, default=True,
+                        help="Share input embedding and output projection weights")
+    parser.add_argument("--use-temporal-pcn", action="store_true", default=False,
+                        help="Next-step latent predictive coding instead of self-reconstruction")
+    parser.add_argument("--use-hierarchical-pcn", action="store_true", default=False,
+                        help="Slow-timescale causal pooled predictive coding")
+    parser.add_argument("--adaptive-k", action="store_true", default=False,
+                        help="Stop PCN refinement early at eval when error is small")
+    parser.add_argument("--error-stop-threshold", type=float, default=0.01)
+    parser.add_argument("--timescale", type=int, default=4, help="Hierarchical pooling window")
+    parser.add_argument("--surprise-store-threshold", type=float, default=0.0,
+                        help="Only write episodic memory when PCN error exceeds this (0=always on store)")
+    parser.add_argument("--memory-topk", type=int, default=4)
+    parser.add_argument(
+        "--pcn-residual-mode",
+        choices=["refined", "sum"],
+        default="refined",
+        help="refined=LayerNorm(z_refined); sum=legacy LayerNorm(z + z_refined)",
+    )
+    parser.add_argument(
+        "--per-token-memory",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Retrieve memory at each position (disable to match old pooled memory)",
+    )
+    parser.add_argument("--patience", type=int, default=0, help="Early-stop patience in epochs (0=off)")
+    parser.add_argument("--label-smoothing", type=float, default=0.0)
+    parser.add_argument("--max-seq-len", type=int, default=None,
+                        help="Positional encoding length (default max(512, seq_len))")
+
     args = parser.parse_args(argv)
+    if args.max_seq_len is None:
+        args.max_seq_len = max(512, args.seq_len)
     
     trainer = Trainer(args)
     trainer.train()

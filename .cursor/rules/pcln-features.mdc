@@ -13,9 +13,11 @@ alwaysApply: false
 | Dynamic neurons | `src/model/dynamic_neurons.py` — `DynamicNeuronLayer`, `DynamicNeuronBlock` |
 | Char tokenization | `src/data/__init__.py` — `CharLevelDataset`, `get_wikitext2_char_dataloader` |
 | WikiText download | `src/data/__init__.py` — `download_wikitext2_direct`, `resolve_wikitext2_text_file` |
-| Composable PCN blocks | `src/model/pcn_model.py` — dynamic + MoE stack when both flags set |
+| Temporal / hierarchical PCN | `src/model/temporal_pcn.py` |
+| Model factory | `src/model/factory.py` — shared train/chat/eval kwargs |
+| Token codec | `src/data/text_codec.py` — must match dataset splitters |
 | Training CLI | `scripts/train_full.py` |
-| Benchmarks | `scripts/run_benchmarks.py` — exp1–4 configs |
+| Benchmarks | `scripts/run_benchmarks.py` — exp1–5 configs |
 
 ## Data loader contract
 
@@ -25,15 +27,15 @@ All `get_*_dataloader` helpers return `(DataLoader, vocab_size, vocab_mappings)`
 
 ## Known limitations
 
-- `DynamicNeuronLayer`: computes all neurons, selects top-k (routing sparse, not FLOP sparse)
-- `SparseMoEPCNBlock`: Python loops over `seq_len` — slow at scale
-- Default training uses last-token logits vs single target per batch (by design in `train_full.py`)
+- `DynamicNeuronLayer`: rank-1 / top-k output; gate still dense over neurons
+- `SparseMoEPCNBlock`: vectorized over time; Python loop over expert count
+- Full-sequence next-token loss; encoder is causal on new runs
 
 ## Benchmark experiments
 
 - exp1: word-level baseline
 - exp2: char-level WikiText-2
 - exp3: dynamic neurons, word-level
-- exp4: char + dynamic + MoE (two sequential PCN blocks)
+- exp5: temporal + hierarchical PCN
 
 Prior Feb 2026 results invalid — rerun per `docs/GPU_NEXT_STEPS.md`.

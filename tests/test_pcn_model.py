@@ -41,6 +41,23 @@ class TestPCLNForward(unittest.TestCase):
         self.assertEqual(len(out["errors"]), 2)
         self.assertGreaterEqual(out["load_balance_loss"].item(), 0.0)
 
+    def test_temporal_and_hierarchical_forward(self):
+        model = PCLN(
+            vocab_size=32,
+            d_model=32,
+            nhead=4,
+            num_encoder_layers=1,
+            num_pcn_blocks=1,
+            use_temporal_pcn=True,
+            use_hierarchical_pcn=True,
+            causal=True,
+            use_memory=True,
+        )
+        tokens = torch.randint(0, 32, (2, 8))
+        out = model(tokens, return_errors=True)
+        self.assertEqual(out["logits"].shape, (2, 8, 32))
+        self.assertEqual(len(out["errors"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

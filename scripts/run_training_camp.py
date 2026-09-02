@@ -106,6 +106,24 @@ def build_jobs(sprint: Path) -> list[CampJob]:
             chat_checkpoint=sprint / "shakespeare_char" / "best_model.pt",
             chat_prompt="First Citizen:",
         ),
+        CampJob(
+            id="wiki_temporal",
+            name="WikiText temporal+hierarchical PCN, stride=64, 30 epochs",
+            cmd=[
+                PYTHON, "scripts/train_full.py",
+                *WIKI_BASE,
+                "--chunk-stride", "64",
+                "--use-temporal-pcn",
+                "--use-hierarchical-pcn",
+                "--adaptive-k",
+                "--patience", "6",
+                "--label-smoothing", "0.05",
+                "--epochs", "30",
+                "--checkpoint-dir", str(sprint / "wiki_temporal"),
+            ],
+            chat_checkpoint=sprint / "wiki_temporal" / "best_model.pt",
+            chat_prompt="the king said",
+        ),
     ]
 
 
@@ -161,7 +179,7 @@ def main() -> int:
         "--jobs",
         type=str,
         default="all",
-        help="Job ids comma-separated, or 'all' (wiki_dynamic,wiki_baseline,shakespeare_char)",
+        help="Job ids comma-separated, or 'all' (wiki_baseline, wiki_stride64, shakespeare_char, wiki_temporal)",
     )
     parser.add_argument(
         "--skip-pytest",

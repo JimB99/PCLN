@@ -1,13 +1,9 @@
-"""Sparse Transformer Encoder for PCLN.
-
-Fast/amortized feedforward encoder that projects tokens to latent beliefs.
-"""
+"""Causal Transformer encoder: tokens → latent beliefs."""
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class PositionalEncoding(nn.Module):
@@ -16,40 +12,34 @@ class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 512):
         super().__init__()
         self.d_model = d_model
-        
+
         pe = torch.zeros(max_len, d_model)
         pos = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float) * 
-                             -(torch.log(torch.tensor(10000.0)) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2, dtype=torch.float)
+            * -(torch.log(torch.tensor(10000.0)) / d_model)
+        )
         pe[:, 0::2] = torch.sin(pos * div_term)
         if d_model % 2 == 1:
             pe[:, 1::2] = torch.cos(pos * div_term[:-1])
         else:
             pe[:, 1::2] = torch.cos(pos * div_term)
-        self.register_buffer('pe', pe.unsqueeze(0))
+        self.register_buffer("pe", pe.unsqueeze(0))
 
     def forward(self, x):
-        """Add positional encoding to embeddings.
-        
-        Args:
-            x: (batch, seq_len, d_model)
-        Returns:
-            x + pos_encoding: (batch, seq_len, d_model)
-        """
-        return x + self.pe[:, :x.size(1), :]
+        """Add positional encoding to embeddings. x: (batch, seq_len, d_model)."""
+        return x + self.pe[:, : x.size(1), :]
+
+
+def _causal_attn_mask(seq_len: int, device: torch.device) -> torch.Tensor:
+    """Boolean mask: True = cannot attend (future positions)."""
+    return torch.triu(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool), diagonal=1)
 
 
 class TransformerEncoder(nn.Module):
-    """Lightweight transformer encoder for fast inference.
-    
-    Args:
-        vocab_size: vocabulary size.
-        d_model: embedding/latent dimension.
-        nhead: number of attention heads.
-        num_layers: number of transformer layers.
-        d_ff: feedforward hidden dimension.
-        dropout: dropout rate.
-        max_len: max sequence length for positional encoding.
+    """Lightweight transformer encoder for amortized inference.
+
+    For language modeling, `causal=True` so position t cannot see tokens > t.
     """
 
     def __init__(
@@ -61,6 +51,7 @@ class TransformerEncoder(nn.Module):
         d_ff: int | None = None,
         dropout: float = 0.1,
         max_len: int = 512,
+        causal: bool = True,
     ):
         super().__init__()
         if d_ff is None:
@@ -68,6 +59,7 @@ class TransformerEncoder(nn.Module):
 
         self.vocab_size = vocab_size
         self.d_model = d_model
+        self.causal = causal
         self.embedding = nn.Embedding(vocab_size, d_model)
         self.pos_encoding = PositionalEncoding(d_model, max_len)
         self.dropout = nn.Dropout(dropout)
@@ -85,26 +77,25 @@ class TransformerEncoder(nn.Module):
 
     def forward(self, tokens, mask=None):
         """Encode token sequence to latent beliefs.
-        
+
         Args:
             tokens: (batch, seq_len) token indices.
-            mask: (batch, seq_len) or None. True = attend, False = mask out.
-        Returns:
-            latent: (batch, seq_len, d_model) latent belief states.
+            mask: (batch, seq_len) or None. True/1 = attend, False/0 = pad.
         """
-        # Embed and add positional encoding
         x = self.embedding(tokens) * (self.d_model ** 0.5)
         x = self.pos_encoding(x)
         x = self.dropout(x)
 
-        # Create attention mask if provided
-        if mask is not None:
-            # PyTorch uses True for positions to mask out
-            attn_mask = ~mask.unsqueeze(1).unsqueeze(2)  # (batch, 1, 1, seq_len)
-            attn_mask = attn_mask.expand(mask.size(0), 1, mask.size(1), mask.size(1))
-        else:
-            attn_mask = None
+        seq_len = x.size(1)
+        src_mask = _causal_attn_mask(seq_len, x.device) if self.causal else None
 
-        x = self.encoder(x, src_key_padding_mask=~mask if mask is not None else None)
+        padding = None
+        if mask is not None:
+            if mask.dtype == torch.bool:
+                padding = ~mask
+            else:
+                padding = mask == 0
+
+        x = self.encoder(x, mask=src_mask, src_key_padding_mask=padding)
         x = self.norm(x)
         return x

@@ -24,5 +24,6 @@ Add unit tests for new calculators, parsers, and domain rules before wiring UI/s
 
 ## Known limitations (document, do not hide)
 
-- `DynamicNeuronLayer` computes all neurons then selects top-k (sparse routing, not sparse FLOPs)
-- `SparseMoEPCNBlock` uses Python loops over sequence length (slow at scale)
+- `DynamicNeuronLayer`: rank-1 units; gate still scores all neurons, output is top-k
+- `SparseMoEPCNBlock`: loops over experts (not sequence length)
+- New training uses a causal encoder; old checkpoints load non-causal unless `args.causal` is set

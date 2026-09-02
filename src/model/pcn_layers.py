@@ -1,7 +1,4 @@
-"""Predictive Coding refinement layers for PCLN.
-
-Implements iterative belief refinement via prediction error minimization.
-"""
+"""Predictive coding refinement layers for PCLN."""
 
 from __future__ import annotations
 
@@ -10,16 +7,7 @@ import torch.nn as nn
 
 
 class PCNRefinementLayer(nn.Module):
-    """Single PCN refining layer.
-    
-    Performs K steps of refinement: z <- z - alpha * (z - f(z))
-    where f(z) is a learned generative model.
-    
-    Args:
-        d_model: dimension of latent beliefs.
-        K: number of refinement steps per forward pass.
-        alpha: refinement learning rate.
-    """
+    """K steps of z ← z - α · (z - f(z)) with learned per-dim damping."""
 
     def __init__(self, d_model: int, K: int = 2, alpha: float = 0.1):
         super().__init__()
@@ -27,77 +15,39 @@ class PCNRefinementLayer(nn.Module):
         self.K = K
         self.alpha = alpha
 
-        # Generative model (predicts z from z)
         self.generator = nn.Sequential(
             nn.Linear(d_model, d_model * 2),
             nn.ReLU(),
             nn.Linear(d_model * 2, d_model),
         )
-
-        # Optional: learned damping factor per dimension
         self.damping = nn.Parameter(torch.ones(d_model) * 0.1)
 
     def forward(self, z, training: bool = True):
-        """Refine latent beliefs.
-        
-        Args:
-            z: (batch, seq_len, d_model) latent states.
-            training: if True, use K_train steps; else use K_eval steps.
-        Returns:
-            refined_z: (batch, seq_len, d_model) refined beliefs.
-            errors: (batch, seq_len, d_model) prediction errors (for auxiliary loss).
-        """
-        batch_size, seq_len, _ = z.shape
-        z_refined = z.clone()
+        z_refined = z
         errors_list = []
+        k_steps = self.K if training else self.K + 1
 
-        # Adaptive K for training vs evaluation
-        K = self.K if training else self.K + 1
-
-        for step in range(K):
-            # Generative prediction
+        for _ in range(k_steps):
             z_pred = self.generator(z_refined)
-            
-            # Prediction error
             error = z_refined - z_pred
             errors_list.append(error)
-            
-            # Update with learned damping
             z_refined = z_refined - self.alpha * error * (1.0 + self.damping)
 
-        # Stack errors for loss computation
-        errors = torch.stack(errors_list, dim=1)  # (batch, K, seq_len, d_model)
+        errors = torch.stack(errors_list, dim=1)
         return z_refined, errors
 
 
 class PCNBlock(nn.Module):
-    """Complete PCN block with residual connection.
-    
-    Combines a refinement layer with residual connection to stabilize training.
-    
-    Args:
-        d_model: latent dimension.
-        K: number of refinement steps.
-        alpha: refinement step size.
-    """
+    """PCN refinement + LayerNorm. Output is the refined state, not z + refined."""
 
-    def __init__(self, d_model: int, K: int = 2, alpha: float = 0.1):
+    def __init__(self, d_model: int, K: int = 2, alpha: float = 0.1, residual_mode: str = "refined"):
         super().__init__()
         self.refine_layer = PCNRefinementLayer(d_model, K, alpha)
         self.norm = nn.LayerNorm(d_model)
+        self.residual_mode = residual_mode
 
     def forward(self, z, training: bool = True):
-        """Apply PCN refinement with residual connection.
-        
-        Args:
-            z: (batch, seq_len, d_model) latent beliefs.
-            training: training mode flag.
-        Returns:
-            z_out: (batch, seq_len, d_model) refined beliefs.
-            errors: (batch, K, seq_len, d_model) prediction errors.
-        """
         z_refined, errors = self.refine_layer(z, training=training)
-        
-        # Residual connection + layer norm
-        z_out = self.norm(z + z_refined)
-        return z_out, errors
+        if self.residual_mode == "sum":
+            return self.norm(z + z_refined), errors
+        return self.norm(z_refined), errors

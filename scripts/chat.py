@@ -7,7 +7,6 @@ Supports session episodic memory, repetition penalty, and optional online learni
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -19,7 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model import PCLN
+from src.model import build_pcln
+from src.model.generation import (
+    apply_repetition_penalty,
+    ban_repeating_ngrams,
+    sample_next_token,
+)
+from src.data.text_codec import CharCodec, WordCodec
 
 DEFAULT_CHECKPOINT = ROOT / "results" / "sprint" / "wiki_stride64" / "best_model.pt"
 FALLBACK_CHECKPOINT = ROOT / "results" / "sprint" / "wiki_baseline" / "best_model.pt"
@@ -50,40 +55,6 @@ def _chat_unavailable_message(checkpoint: Path) -> str:
     return "\n".join(lines)
 
 
-def _apply_repetition_penalty(
-    logits: torch.Tensor,
-    token_history: list[int],
-    penalty: float,
-) -> torch.Tensor:
-    """Reduce logits for tokens that appeared recently (HF-style repetition penalty)."""
-    if penalty <= 0 or not token_history:
-        return logits
-    out = logits.clone()
-    for tid in set(token_history):
-        score = out[:, tid]
-        out[:, tid] = torch.where(score > 0, score / penalty, score * penalty)
-    return out
-
-
-def _ban_repeating_ngrams(
-    logits: torch.Tensor,
-    token_history: list[int],
-    ngram_size: int,
-) -> torch.Tensor:
-    """Block tokens that would repeat an n-gram already seen in history."""
-    if ngram_size <= 1 or len(token_history) < ngram_size - 1:
-        return logits
-    out = logits.clone()
-    prefix = tuple(token_history[-(ngram_size - 1):])
-    banned: set[int] = set()
-    for i in range(len(token_history) - ngram_size + 1):
-        if tuple(token_history[i : i + ngram_size - 1]) == prefix:
-            banned.add(token_history[i + ngram_size - 1])
-    for tid in banned:
-        out[:, tid] = float("-inf")
-    return out
-
-
 class ChatBot:
     """Text-based chatbot interface for PCLN."""
 
@@ -99,6 +70,7 @@ class ChatBot:
         decode_top_k: int = 40,
         decode_repetition_penalty: float = 1.25,
         decode_no_repeat_ngram_size: int = 3,
+        decode_top_p: float = 0.9,
     ):
         self.device = torch.device(device if device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
         self.checkpoint_path = Path(checkpoint_path)
@@ -110,6 +82,7 @@ class ChatBot:
         self.decode_top_k = decode_top_k
         self.decode_repetition_penalty = decode_repetition_penalty
         self.decode_no_repeat_ngram_size = decode_no_repeat_ngram_size
+        self.decode_top_p = decode_top_p
         self.session_turns: list[tuple[str, str]] = []
 
         print(f"Device: {self.device}")
@@ -157,29 +130,16 @@ class ChatBot:
         self.unk_token_id = actual_vocab_size - 1
         print(f"Inferred vocab size from checkpoint: {actual_vocab_size}")
 
-        model_kwargs = {
-            "vocab_size": actual_vocab_size,
-            "d_model": args.d_model,
-            "nhead": args.nhead,
-            "num_encoder_layers": args.num_encoder_layers,
-            "num_pcn_blocks": args.num_pcn_blocks,
-            "K_pcn": args.K_pcn,
-            "alpha_pcn": args.alpha_pcn,
-            "dropout": args.dropout,
-            "use_memory": args.use_memory,
-            "episodic_memory_size": args.episodic_memory_size,
-            "semantic_slots": args.semantic_slots,
-            "use_sparse_moe": getattr(args, "use_sparse_moe", False),
-            "use_dynamic_neurons": getattr(args, "use_dynamic_neurons", False),
-            "num_experts": getattr(args, "num_experts", 4),
-            "top_k_experts": getattr(args, "top_k_experts", 2),
-            "num_neurons": getattr(args, "num_neurons", 256),
-            "top_k_neurons": getattr(args, "top_k_neurons", 32),
-        }
-
-        self.model = PCLN(**model_kwargs).to(self.device)
+        self.model = build_pcln(args, actual_vocab_size, default_causal=False).to(self.device)
         self.model.load_state_dict(checkpoint["model_state"])
         self.model.eval()
+
+        self.word_codec: WordCodec | None = None
+        self.char_codec: CharCodec | None = None
+        if self.text_mode and self.tokenization == "char":
+            self.char_codec = CharCodec(self.char2id, self.id2char, unk_id=0)
+        elif self.text_mode:
+            self.word_codec = WordCodec(self.word2id, self.id2word, unk_id=self.unk_token_id)
 
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = None
@@ -192,32 +152,24 @@ class ChatBot:
         print("Model loaded successfully!")
 
     def encode_text(self, text: str) -> list[int]:
-        """Convert text to token IDs."""
+        """Convert text to token IDs using the same rules as training."""
         if not self.text_mode:
             raise RuntimeError("Text mode not available - model trained on random tokens")
-
-        if self.tokenization == "char":
-            tokens = [self.char2id.get(ch, 0) for ch in text]
-            return tokens if tokens else [0]
-
-        words = re.findall(r"\b\w+\b", text.lower())
-        tokens = [self.word2id.get(word, self.unk_token_id) for word in words]
-        return tokens if tokens else [self.unk_token_id]
+        if self.char_codec is not None:
+            return self.char_codec.encode(text)
+        if self.word_codec is not None:
+            return self.word_codec.encode(text)
+        raise RuntimeError("No codec loaded")
 
     def decode_tokens(self, token_ids: list[int]) -> str:
         """Convert token IDs back to text."""
         if not self.text_mode:
             raise RuntimeError("Text mode not available - model trained on random tokens")
-
-        if self.tokenization == "char":
-            return "".join(self.id2char.get(token_id, "") for token_id in token_ids)
-
-        words = []
-        for token_id in token_ids:
-            word = self.id2word.get(token_id, "<unk>")
-            if word != "<unk>":
-                words.append(word)
-        return " ".join(words)
+        if self.char_codec is not None:
+            return self.char_codec.decode(token_ids)
+        if self.word_codec is not None:
+            return self.word_codec.decode(token_ids)
+        raise RuntimeError("No codec loaded")
 
     @torch.no_grad()
     def generate(
@@ -228,6 +180,7 @@ class ChatBot:
         top_k: int | None = 40,
         repetition_penalty: float = 1.2,
         no_repeat_ngram_size: int = 0,
+        top_p: float = 0.9,
         store_memory: bool = False,
     ) -> list[int]:
         """Generate tokens given a prompt."""
@@ -245,20 +198,15 @@ class ChatBot:
                 store_memory=store_memory,
             )
             logits = output["logits"][:, -1, :]
-            logits = _apply_repetition_penalty(logits, history[-32:], repetition_penalty)
-            logits = _ban_repeating_ngrams(logits, history, no_repeat_ngram_size)
-            logits = logits / max(temperature, 0.01)
-
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)), dim=-1)
-                logits[logits < v[:, [-1]]] = float("-inf")
-
-            probs = torch.softmax(logits, dim=-1)
-            if not torch.isfinite(probs).all() or probs.sum() <= 0:
-                next_token = torch.argmax(logits, dim=-1, keepdim=True)
-            else:
-                next_token = torch.multinomial(probs, num_samples=1)
-            tid = next_token.item()
+            logits = apply_repetition_penalty(logits, history[-32:], repetition_penalty)
+            logits = ban_repeating_ngrams(logits, history, no_repeat_ngram_size)
+            next_token = sample_next_token(
+                logits,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+            )
+            tid = int(next_token.item())
             generated.append(tid)
             history.append(tid)
             tokens = torch.cat([tokens, next_token], dim=1)
@@ -310,6 +258,7 @@ class ChatBot:
             top_k=self.decode_top_k,
             repetition_penalty=self.decode_repetition_penalty,
             no_repeat_ngram_size=self.decode_no_repeat_ngram_size,
+            top_p=self.decode_top_p,
             store_memory=store,
         )
         reply = self.decode_tokens(generated)
@@ -401,6 +350,7 @@ def main(argv=None):
     parser.add_argument("--temperature", type=float, default=0.75)
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--repetition-penalty", type=float, default=1.25)
+    parser.add_argument("--top-p", type=float, default=0.9, help="Nucleus sampling (1.0=off)")
     parser.add_argument(
         "--no-repeat-ngram-size",
         type=int,
@@ -441,6 +391,7 @@ def main(argv=None):
         decode_top_k=args.top_k,
         decode_repetition_penalty=args.repetition_penalty,
         decode_no_repeat_ngram_size=args.no_repeat_ngram_size,
+        decode_top_p=args.top_p,
     )
 
     if not chatbot.text_mode:
@@ -456,6 +407,7 @@ def main(argv=None):
             top_k=args.top_k,
             repetition_penalty=args.repetition_penalty,
             no_repeat_ngram_size=args.no_repeat_ngram_size,
+            top_p=args.top_p,
             store_memory=chatbot.use_session_memory,
         )
         print(f"Prompt: {args.prompt}")
