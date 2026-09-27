@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Phase 5 quality sprint: scaled training + generation samples.
 
-Runs sequentially (safe on 4 GB GPU). Logs to results/sprint/ and docs/SPRINT_RESULTS.md
+Runs sequentially (safe on 4 GB GPU). Logs to results/sprint/SPRINT_LOG.md
 """
 
 import subprocess
@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SPRINT_DIR = ROOT / "results" / "sprint"
-LOG = ROOT / "docs" / "SPRINT_RESULTS.md"
+LOG = SPRINT_DIR / "SPRINT_LOG.md"
 PYTHON = sys.executable
 
 

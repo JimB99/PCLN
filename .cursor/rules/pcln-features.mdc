@@ -38,4 +38,4 @@ All `get_*_dataloader` helpers return `(DataLoader, vocab_size, vocab_mappings)`
 - exp3: dynamic neurons, word-level
 - exp5: temporal + hierarchical PCN
 
-Prior Feb 2026 results invalid — rerun per `docs/GPU_NEXT_STEPS.md`.
+Prior Feb 2026 results invalid — rerun per `docs/REPRODUCING.md`.

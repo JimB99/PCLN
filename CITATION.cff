@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+title: PCLN - Predictive Coding Language Model
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Buisman
+    given-names: Jim
+    name-particle: ""
+repository-code: "https://github.com/JimB99/PCLN"
+url: "https://github.com/JimB99/PCLN"
+license: MIT
+keywords:
+  - language-model
+  - predictive-coding
+  - mixture-of-experts
+  - pytorch
+abstract: "Research-scale language model combining a causal transformer encoder, predictive-coding refinement, episodic and semantic memory, and optional sparse experts."

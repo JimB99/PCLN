@@ -32,7 +32,7 @@ Text-to-text LM with belief refinement, explicit memory, and sparse modular stru
 
 ## GPU work
 
-Human checklist: `docs/GPU_NEXT_STEPS.md`. Run full benchmarks on NVIDIA GPU only.
+Human checklist: `docs/REPRODUCING.md`. Run full benchmarks on NVIDIA GPU only.
 
 ## Architecture flags
 

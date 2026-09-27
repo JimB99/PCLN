@@ -12,8 +12,8 @@ alwaysApply: false
 |----------|----------|
 | Users / overview | `README.md` |
 | Install | `docs/SETUP.md` |
-| GPU benchmark checklist | `docs/GPU_NEXT_STEPS.md` |
-| Benchmark results (committed) | `docs/benchmark_summary.md` |
+| GPU benchmark checklist | `docs/REPRODUCING.md` |
+| Benchmark results (committed) | `docs/EXPERIMENTS.md` |
 | Raw experiment output | `results/` (gitignored) |
 | Agent rules | `.cursor/rules/*.mdc` |
 
