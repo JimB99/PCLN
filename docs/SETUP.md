@@ -48,13 +48,16 @@ See **[REPRODUCING.md](REPRODUCING.md)**. Do not run the full 4×8-epoch suite o
 ## Training recipes
 
 ```bash
-# WikiText-2 word-level
+# Locked causal ablation (quoteable)
+python scripts/run_causal_ablation.py --max-hours 6.5
+
+# WikiText-2 word-level (ad hoc)
 python scripts/train_full.py --dataset wikitext2 --epochs 8
 
 # Overlapping chunks (more sequences per epoch)
 python scripts/train_full.py --dataset wikitext2 --chunk-stride 64 --seq-len 128 --epochs 8
 
-# Multi-hour GPU queue (resume + samples)
+# Multi-hour GPU queue (old sprint jobs; prefer run_causal_ablation.py)
 python scripts/run_training_camp.py --max-hours 6 --resume-all
 
 # WikiText-2 character-level
@@ -68,7 +71,7 @@ python scripts/train_full.py --dataset wikitext2 --use-char-level \
 python scripts/train_full.py --use-dynamic-neurons --num-neurons 512 --top-k-neurons 64
 ```
 
-WikiText-2 loading uses an automatic fallback chain (Salesforce HF CDN → S3 zip → Tiny Shakespeare) for `--dataset wikitext2`.
+WikiText-2 loading tries HuggingFace parquet, then text/gzip, then the S3 zip. A failed download **raises**; it does not fall back to Tiny Shakespeare. Use `--data-file data/tiny_shakespeare.txt` for the char-level demo.
 
 ## Chat and evaluation
 

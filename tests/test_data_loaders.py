@@ -31,11 +31,18 @@ class TestCharLevelDataset(unittest.TestCase):
 
 
 class TestWikiTextFallback(unittest.TestCase):
-    def test_resolve_falls_back_to_shakespeare(self):
+    def test_resolve_raises_when_download_fails(self):
+        with patch("src.data.download_wikitext2_direct", return_value=None):
+            with self.assertRaises(FileNotFoundError):
+                resolve_wikitext2_text_file(split="train")
+
+    def test_resolve_falls_back_to_shakespeare_when_allowed(self):
         with patch("src.data.download_wikitext2_direct", return_value=None):
             with patch("src.data.download_tiny_shakespeare") as mock_shake:
                 mock_shake.return_value = "data/tiny_shakespeare.txt"
-                path = resolve_wikitext2_text_file(split="train")
+                path = resolve_wikitext2_text_file(
+                    split="train", allow_shakespeare_fallback=True
+                )
                 self.assertEqual(path, "data/tiny_shakespeare.txt")
 
 

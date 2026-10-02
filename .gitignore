@@ -3,3 +3,9 @@ __pycache__/
 *.pyc
 results/
 checkpoints/
+.pytest_cache/
+.vscode/
+data/wikitext2/
+data/wikitext2_test/
+*.parquet
+docs/TRAINING_CAMP_STATUS.md

@@ -273,13 +273,38 @@ def download_wikitext2_direct(split: str = "train", output_dir: str = "data/wiki
         return None
 
 
-def resolve_wikitext2_text_file(split: str = "train", output_dir: str = "data/wikitext2") -> str:
-    """Return a local text file path for WikiText-2 or Tiny Shakespeare fallback."""
+def resolve_wikitext2_text_file(
+    split: str = "train",
+    output_dir: str = "data/wikitext2",
+    allow_shakespeare_fallback: bool = False,
+) -> str:
+    """Return a local WikiText-2 text file path.
+
+    Tiny Shakespeare is not WikiText-2. The fallback is opt-in only so a failed
+    download cannot silently produce fake WikiText metrics.
+    """
     file_path = download_wikitext2_direct(split=split, output_dir=output_dir)
     if file_path and Path(file_path).exists():
-        return file_path
-    print("WikiText-2 unavailable, falling back to Tiny Shakespeare...")
-    return download_tiny_shakespeare()
+        resolved = str(file_path)
+        if not allow_shakespeare_fallback:
+            _assert_not_shakespeare_corpus(resolved)
+        return resolved
+    if allow_shakespeare_fallback:
+        print("WikiText-2 unavailable, falling back to Tiny Shakespeare...")
+        return download_tiny_shakespeare()
+    raise FileNotFoundError(
+        f"WikiText-2 split {split!r} could not be downloaded into {output_dir}. "
+        "Tiny Shakespeare fallback is disabled by default."
+    )
+
+
+def _assert_not_shakespeare_corpus(file_path: str) -> None:
+    normalized = str(file_path).replace("\\", "/").lower()
+    if "shakespeare" in normalized:
+        raise RuntimeError(
+            f"Refusing to treat {file_path} as WikiText-2. "
+            "Pass allow_shakespeare_fallback=True only for explicit demos."
+        )
 
 
 class WikiText2Dataset(Dataset):
@@ -334,20 +359,10 @@ class WikiText2Dataset(Dataset):
                 print(f"  Failed: {type(e).__name__}: {str(e)[:60]}...")
 
         if dataset is None:
-            print("  Attempting: Tiny Shakespeare fallback...")
-            shakespeare_path = download_tiny_shakespeare()
-            dataset_obj = TextFileDataset(
-                file_path=shakespeare_path,
-                seq_len=seq_len,
-                vocab_size=vocab_size,
-                max_samples=max_samples,
-                chunk_stride=self.chunk_stride,
+            raise FileNotFoundError(
+                f"WikiText-2 split {split!r} could not be loaded from {output_dir} "
+                "or HuggingFace datasets. Tiny Shakespeare fallback is disabled."
             )
-            self.data = dataset_obj.data
-            self.word2id = dataset_obj.word2id
-            self.id2word = dataset_obj.id2word
-            self.vocab_size = dataset_obj.vocab_size
-            return
 
         texts = dataset["text"]
         full_text = " ".join(texts)
@@ -450,7 +465,7 @@ def get_wikitext2_dataloader(
     word2id: dict[str, int] | None = None,
     chunk_stride: int | None = None,
 ) -> LoaderResult:
-    """Word-level WikiText-2 dataloader with Tiny Shakespeare fallback."""
+    """Word-level WikiText-2 dataloader. Does not fall back to Tiny Shakespeare."""
     file_path = resolve_wikitext2_text_file(split=split)
     dataset = TextFileDataset(
         file_path=file_path,
@@ -479,7 +494,7 @@ def get_wikitext2_char_dataloader(
     char2id: dict[str, int] | None = None,
     chunk_stride: int | None = None,
 ) -> LoaderResult:
-    """Character-level WikiText-2 dataloader with Tiny Shakespeare fallback."""
+    """Character-level WikiText-2 dataloader. Does not fall back to Tiny Shakespeare."""
     file_path = resolve_wikitext2_text_file(split=split)
     dataset = CharLevelDataset(
         file_path=file_path,

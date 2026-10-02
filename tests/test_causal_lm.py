@@ -65,6 +65,18 @@ class TestCausalLanguageModel(unittest.TestCase):
         # Bidirectional models may let the last token affect earlier logits.
         self.assertEqual(la.shape, lb.shape)
 
+    def test_transformer_only_stays_causal(self):
+        torch.manual_seed(4)
+        model = self._tiny(num_pcn_blocks=0, use_memory=False)
+        model.eval()
+        a = torch.randint(0, 32, (2, 8))
+        b = a.clone()
+        b[:, -1] = (b[:, -1] + 1) % 32
+        with torch.no_grad():
+            la = model(a)["logits"]
+            lb = model(b)["logits"]
+        self.assertTrue(torch.allclose(la[:, :-1], lb[:, :-1], atol=1e-5, rtol=1e-5))
+
 
 if __name__ == "__main__":
     unittest.main()

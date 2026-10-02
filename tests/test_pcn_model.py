@@ -58,6 +58,22 @@ class TestPCLNForward(unittest.TestCase):
         self.assertEqual(out["logits"].shape, (2, 8, 32))
         self.assertEqual(len(out["errors"]), 2)
 
+    def test_transformer_only_forward_has_no_pcn_blocks(self):
+        model = PCLN(
+            vocab_size=32,
+            d_model=32,
+            nhead=4,
+            num_encoder_layers=1,
+            num_pcn_blocks=0,
+            use_memory=False,
+            causal=True,
+        )
+        self.assertEqual(len(model.pcn_blocks), 0)
+        tokens = torch.randint(0, 32, (2, 8))
+        out = model(tokens, return_errors=True)
+        self.assertEqual(out["logits"].shape, (2, 8, 32))
+        self.assertEqual(out["errors"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

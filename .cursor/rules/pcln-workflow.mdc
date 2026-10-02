@@ -21,6 +21,7 @@ alwaysApply: true
 ## Do not
 
 - Create scattered markdown outside `docs/` and `README.md`
-- Trust pre-Aug-2026-fix benchmark results
+- Cite sprint / Phase 4 / pre-causal numbers as LM perplexity
 - Skip saving vocab mappings in training checkpoints
-- Run full benchmark suite on CPU-only hardware
+- Run the locked full-data ablation on CPU-only hardware
+- Fall back from WikiText-2 to Tiny Shakespeare

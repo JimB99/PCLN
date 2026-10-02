@@ -1,79 +1,92 @@
 # PCLN — Predictive Coding Language Model
 
-Hybrid **predictive coding + transformer encoder + explicit memory + optional sparse MoE** for next-token language modeling at research scale.
+Research-scale language model for a single question: **at ~4.2–4.5M parameters on WikiText-2, does a predictive-coding refinement block beat a matched causal transformer encoder + decoder?**
 
-**Status:** Active research prototype (~2–40M parameters, WikiText-2 scale). Checkpoints are not committed (`results/` is gitignored). Reported perplexities below were measured with a **non-causal encoder** unless retrained with current defaults; treat them as internal comparisons, not published LM benchmarks. See [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md) and [docs/PCLN_METHOD.md](docs/PCLN_METHOD.md).
+This is an architectural testbed, not a production LLM. Checkpoints are gitignored under `results/`.
 
----
-
-## Motivation
-
-Standard decoder-only transformers map tokens to logits in a fixed stack of layers. PCLN adds **iterative latent refinement** (predictive-coding blocks), **retrieved episodic and semantic memory**, and optional **sparse modular experts** so internal state is updated by prediction error—not only by depth. The goal is to study whether explicit belief update and memory help at small scale before scaling data and parameters.
+Quoteable numbers: **[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)** (causal ablation only). Method: **[docs/PCLN_METHOD.md](docs/PCLN_METHOD.md)**. Older sprint and 1k-sample runs are archived there as **not for citation**.
 
 ---
 
 ## Architecture
 
 ```
-tokens → causal encoder → PCN refinement → memory → decoder → next-token logits
+tokens → causal transformer encoder → optional PCN block → decoder → next-token logits
 ```
 
-| Component | Role |
-|-----------|------|
-| Causal transformer encoder | Token representations (causal on new training runs) |
-| PCN blocks | Minimize prediction error over K refinement steps |
-| Episodic + semantic memory | Retrieve and fuse stored latents before decoding |
-| Optional dynamic neurons / MoE | Top-k sparse transforms (Shazeer et al.–style routing at block level) |
+The locked ablation turns memory off so PCN is not confounded with a fusion MLP. Two PCN variants exist:
 
-Technical report: **[docs/PCLN_METHOD.md](docs/PCLN_METHOD.md)**.
+- **Self-PCN** (default `PCNBlock`): reconstruct each latent from itself (a learned denoiser, not Rao–Ballard sensory prediction).
+- **Temporal PCN** (`--use-temporal-pcn`): predict `z_t` from `z_{t-1}` with precision-weighted updates.
 
-### Implemented variants (opt-in flags)
+`scripts/train_full.py` is the language-model trainer. `scripts/train.py` is a numpy/PyTorch smoke path and does **not** train PCLN.
 
-| Flag | Idea | Reference |
-|------|------|-----------|
-| `--use-temporal-pcn` | Causal next-latent prediction (generative PCN) | Rao & Ballard (1999); temporal predictive coding |
-| `--use-hierarchical-pcn` | Slow pooled state predicts local means | Rao–Ballard hierarchical PCN |
-| `--adaptive-k` | Stop refinement when error is small | Adaptive inference depth |
-| `--surprise-store-threshold` | Write episodic memory on high PCN error | Surprise-gated memory |
-| `--use-dynamic-neurons` | Top-k gated units (factorized rank-1) | Conditional computation |
-| `--use-sparse-moe` | Route tokens to top-k expert PCN blocks | Shazeer et al., Mixture-of-Experts |
-| `--use-char-level` | Character vocabulary (no `<unk>`) | — |
+---
 
-Flags compose as **sequential PCN blocks** (e.g. dynamic neurons then MoE).
+## Five-minute path
+
+```bash
+cd PCLN
+python -m venv .venv
+source .venv/Scripts/activate          # Windows Git Bash
+# source .venv/bin/activate            # Linux/macOS
+pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements.txt
+pytest tests/ -q
+python scripts/check_docs.py
+python scripts/train_full.py --dataset dummy --epochs 1 --batch-size 8 --num-pcn-blocks 0 --no-use-memory
+```
+
+Dummy checkpoints have no text vocabulary and cannot chat. GPU install: [docs/SETUP.md](docs/SETUP.md). Locked WikiText-2 command: [docs/REPRODUCING.md](docs/REPRODUCING.md).
+
+---
+
+## Causal ablation (the CV result)
+
+Three matched runs, seed 42, full WikiText-2, custom 10k word vocab, causal encoder, train stride 64, **non-overlapping** val/test (stride 128), memory off, GTX 1650 4 GB:
+
+| ID | Difference from transformer |
+|----|-----------------------------|
+| `wiki_tf` | `--num-pcn-blocks 0` |
+| `wiki_pcn` | `--num-pcn-blocks 1` (self-PCN) |
+| `wiki_temporal` | `--num-pcn-blocks 1 --use-temporal-pcn` |
+
+```bash
+python scripts/run_causal_ablation.py --max-hours 6.5
+```
+
+On a GTX 1650 (4 GB), seed 42, custom 10k word vocab, causal encoder, memory off, non-overlapping test:
+
+| Run | Params | Test PPL |
+|-----|--------|----------|
+| Transformer (`wiki_tf`) | 4.15M | 92.12 |
+| Self-PCN (`wiki_pcn`) | 4.41M | 96.73 |
+| Temporal PCN (`wiki_temporal`) | 4.55M | **77.55** |
+
+Self-PCN did not beat the transformer. Temporal PCN did on this protocol (15.8% relative test-PPL drop, with 9.5% more parameters). Full table, protocol, and caveats: [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md). These numbers are **not** comparable to published WikiText-2 literature perplexities.
 
 ---
 
 ## Known limitations
 
-- Dynamic neurons: sparse output path; gate still scores the full pool.
-- Sparse MoE: loop over expert count, not sequence length.
-- Legacy sprint checkpoints may be **non-causal**; `chat.py` / `eval_perplexity.py` respect checkpoint args.
-- Pre-causal WikiText perplexities are **not** comparable to standard causal LM reports until retrain (see Experiments).
+- Self-PCN is latent denoising, not cortical predictive coding of observations.
+- Custom 10k word vocabulary; do not compare to AWD-LSTM / Transformer-XL tables.
+- Optional memory, MoE, and dynamic neurons exist in code but are **out of** the locked ablation.
+- Dynamic-neuron gates still score the full pool; sparse MoE loops over experts.
+- WikiText-2 download no longer falls back to Tiny Shakespeare.
 
 ---
 
 ## Usage
 
-Install and smoke test: **[docs/SETUP.md](docs/SETUP.md)**. Full GPU benchmarks: **[docs/REPRODUCING.md](docs/REPRODUCING.md)**.
-
 | Task | Command |
 |------|---------|
-| Smoke train | `python scripts/train_full.py --dataset dummy --epochs 1 --batch-size 8` |
-| WikiText-2 word LM | `python scripts/train_full.py --dataset wikitext2 --epochs 8` |
-| Overlapping chunks | `python scripts/train_full.py --dataset wikitext2 --chunk-stride 64 --seq-len 128 --epochs 8` |
-| Recommended retrain | `python scripts/train_full.py --dataset wikitext2 --chunk-stride 64 --seq-len 128 --epochs 30 --use-temporal-pcn --use-hierarchical-pcn --adaptive-k --patience 6` |
-| Chat (local checkpoint) | `python scripts/chat.py --checkpoint results/sprint/wiki_stride64/best_model.pt --repetition-penalty 1.35 --no-repeat-ngram-size 3` |
-| Test perplexity | `python scripts/eval_perplexity.py --checkpoint <path> --split test` |
+| Dummy smoke | `python scripts/train_full.py --dataset dummy --epochs 1 --batch-size 8 --num-pcn-blocks 0 --no-use-memory` |
+| Locked ablation | `python scripts/run_causal_ablation.py --max-hours 6.5` |
+| Test perplexity | `python scripts/eval_perplexity.py --checkpoint results/causal_ablation/wiki_temporal/best_model.pt --split test` |
+| Chat (local ckpt) | `python scripts/chat.py --checkpoint results/causal_ablation/wiki_temporal/best_model.pt --repetition-penalty 1.35 --no-repeat-ngram-size 3` |
 
-Dummy training produces a checkpoint **without vocabulary**—not usable for chat. Real checkpoints must include `vocab_mappings`.
-
-More train flags (char-level, MoE, training camp): see **Training recipes** in [docs/SETUP.md](docs/SETUP.md).
-
----
-
-## Evaluation
-
-Recorded runs and comparability notes: **[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)**.
+Eval defaults to non-overlapping chunks. Do not pass `--use-train-stride` for published PPL.
 
 ---
 
@@ -81,10 +94,13 @@ Recorded runs and comparability notes: **[docs/EXPERIMENTS.md](docs/EXPERIMENTS.
 
 ```
 src/model/           # Architecture
-src/data/            # Data loading
-scripts/             # train_full.py, chat.py, run_benchmarks.py
-docs/                # SETUP.md, REPRODUCING.md, PCLN_METHOD.md, EXPERIMENTS.md
-.cursor/rules/       # Coding and experiment conventions (Cursor)
+src/data/            # WikiText-2 and codecs
+scripts/train_full.py
+scripts/run_causal_ablation.py
+scripts/eval_perplexity.py
+scripts/chat.py
+docs/                # SETUP, REPRODUCING, METHOD, EXPERIMENTS
+.cursor/rules/       # Agent conventions
 ```
 
 ---
@@ -92,17 +108,8 @@ docs/                # SETUP.md, REPRODUCING.md, PCLN_METHOD.md, EXPERIMENTS.md
 ## System requirements
 
 - **Python:** 3.10 or 3.11
-- **GPU:** Optional; recommended for full benchmark suite (~1–2 h on GTX 1650 class)
-- **CPU:** Tests and smoke training; full benchmark suite not recommended on CPU
-
----
-
-## Roadmap
-
-- Causal retrain on WikiText-2 with temporal/hierarchical PCN; refresh perplexity table
-- Pretrained encoder init (small GPT-2–compatible stack)
-- Instruction-style fine-tuning; text-backed episodic memory
-- Continual learning (replay / EWC) for `--learn-on-chat`
+- **GPU:** GTX 1650 class (4 GB) for the locked ablation (~5–6 h for three 28-epoch runs)
+- **CPU:** tests and dummy smoke only
 
 ---
 

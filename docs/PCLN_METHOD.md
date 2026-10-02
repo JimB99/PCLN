@@ -49,25 +49,26 @@ The decoder fuses retrieved memory with refined latents before the output projec
 - **Dynamic neurons:** top-k gated transforms per token (factorized rank-1 implementation).
 - **Sparse MoE:** route tokens to top-k expert PCN blocks (Shazeer et al., 2017).
 
-These modules target modularity and compute efficiency; they have **not** consistently beaten the dense baseline at full WikiText scale in recorded runs ([EXPERIMENTS.md](EXPERIMENTS.md)).
+A **matched transformer baseline** (`--num-pcn-blocks 0 --no-use-memory`) is required before attributing gains to PCN. The locked protocol is in [REPRODUCING.md](REPRODUCING.md).
 
 ## Experimental setup
 
 - **Data:** WikiText-2 (Merity et al., 2016), Tiny Shakespeare for char-level demos; optional custom `--data-file`.
 - **Scale:** ~2–40M parameters; GTX 1650 class GPU for benchmark suite; low-VRAM mode for 4 GB cards.
-- **Evaluation:** validation loss, test perplexity via `eval_perplexity.py`, qualitative generation via `chat.py` with repetition controls.
-- **Reproducibility:** `pytest tests/`, smoke `train_full.py --dataset dummy`, full suite in [REPRODUCING.md](REPRODUCING.md).
+- **Evaluation:** token-weighted NLL and perplexity via `eval_perplexity.py` with **non-overlapping** chunks (stride = seq_len). Overlapping train stride is training-only.
+- **Reproducibility:** `pytest tests/`, smoke `train_full.py --dataset dummy`, locked ablation in [REPRODUCING.md](REPRODUCING.md). WikiText loaders raise if the corpus cannot be downloaded.
 
 ## Results
 
-See **[EXPERIMENTS.md](EXPERIMENTS.md)**. Summary:
+See **[EXPERIMENTS.md](EXPERIMENTS.md)** (causal ablation, 2026-10-02, GTX 1650). Summary:
 
-- Best sprint validation loss on full WikiText-2: **wiki_stride64** (val 4.0334, test perplexity 53.0 with overlapping chunks)—still pre-causal-retrain encoder unless re-run with current defaults.
-- Dynamic neurons won a **short** Phase 4 micro-benchmark but not the full-data sprint at matched training budget.
+- Matched transformer (`wiki_tf`): test PPL **92.12** (4.15M params).
+- Self-PCN (`wiki_pcn`): test PPL **96.73** — worse than the transformer.
+- Temporal PCN (`wiki_temporal`): test PPL **77.55** (4.55M params) — 15.8% relative improvement vs the transformer on this protocol, not param-matched and not comparable to literature WikiText-2 tables.
 
 ## Limitations
 
-PCLN at this scale does not compete with billion-parameter models on data volume, compute, or instruction tuning. Sprint generations exhibit repetition; decoding mitigations (repetition penalty, n-gram blocking) are required for interactive use. Pre-causal checkpoint metrics must not be quoted as standard LM perplexity without retraining.
+PCLN at this scale does not compete with billion-parameter models on data volume, compute, or instruction tuning. Generations exhibit repetition unless decoding uses a repetition penalty and n-gram blocking. Self-PCN is latent self-reconstruction, not Rao–Ballard sensory prediction. The custom 10k word vocabulary is not the standard WikiText-2 evaluation protocol.
 
 ## Online learning and memory at chat time
 
@@ -91,7 +92,7 @@ End-to-end GPT weights cannot be loaded: the forward path includes PCN and memor
 
 | Use case | Recommendation |
 |----------|----------------|
-| Best recorded WikiText val / test ppl | **wiki_stride64** checkpoint path + causal retrain for publication |
+| Best recorded WikiText val / test ppl | `wiki_temporal` in the causal ablation table (not literature-comparable) |
 | Dynamic neurons ablation | 128 neurons on 4 GB GPU; match epoch budget to baseline |
 | Char-level demo | Tiny Shakespeare, 40+ epochs |
 | Interactive decode | `wiki_stride64` + `--repetition-penalty 1.35 --no-repeat-ngram-size 3` |
@@ -102,7 +103,9 @@ End-to-end GPT weights cannot be loaded: the forward path includes PCN and memor
 - Vaswani, A., et al. (2017). Attention is all you need. *NeurIPS*.
 - Shazeer, N., et al. (2017). Outrageously large neural networks: The sparsely-gated mixture-of-experts layer. *ICLR*.
 - Merity, S., et al. (2016). Pointer sentinel mixture models. *ICLR* (WikiText-2).
-- Millidge, B., Tschantz, A., & Buckley, C. L. Predictive coding approximates backprop along arbitrary computation graphs (survey line for PCN and deep learning).
+- Millidge, B., Tschantz, A., & Buckley, C. L. Predictive coding approximates backprop along arbitrary computation graphs.
+- Salvatori, T., et al. Learning on arbitrary graph topologies via predictive coding. (PC / deep learning line).
+- Ororbia, A., & Mali, A. Predictive coding and sequential models (survey line).
 
 ## Future work
 
@@ -113,14 +116,14 @@ Open:
 1. Instruction fine-tuning
 2. Text-backed episodic memory (token summaries, not only latents)
 3. Pretrained encoder initialization
-4. **Causal retrain** and refreshed perplexity table
+4. Parameter-matched FLOPs comparison and a 33k-vocab WikiText-2 protocol
 5. Continual learning (replay / EWC) for `--learn-on-chat`
 
 ## Chat (local checkpoint)
 
 ```bash
 python scripts/chat.py \
-  --checkpoint results/sprint/wiki_stride64/best_model.pt \
+  --checkpoint results/causal_ablation/wiki_temporal/best_model.pt \
   --repetition-penalty 1.35 --no-repeat-ngram-size 3
 ```
 

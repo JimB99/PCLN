@@ -11,6 +11,8 @@ for f in files:
     s = f.read_text(encoding="utf-8")
     if "contentReference" in s or "oaicite" in s:
         issues.append(f"{f}: contains citation artifacts (contentReference/oaicite)")
+    if "53.0" in s:
+        issues.append(f"{f}: contains invalid sprint PPL 53.0")
     in_fence = False
     for i, line in enumerate(s.splitlines(), start=1):
         stripped = line.strip()

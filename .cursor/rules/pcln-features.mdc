@@ -38,4 +38,8 @@ All `get_*_dataloader` helpers return `(DataLoader, vocab_size, vocab_mappings)`
 - exp3: dynamic neurons, word-level
 - exp5: temporal + hierarchical PCN
 
-Prior Feb 2026 results invalid — rerun per `docs/REPRODUCING.md`.
+## Quoteable results
+
+Cite only `docs/EXPERIMENTS.md` causal ablation (2026-10-02). `run_benchmarks.py` exp1–5 is a 1k-sample smoke suite, not publishable.
+
+WikiText loaders must not fall back to Tiny Shakespeare (`allow_shakespeare_fallback=False` by default).

@@ -10,11 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
+import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
 import time
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -44,6 +47,44 @@ def _should_stop_early(worse_epochs: int, patience: int) -> bool:
     return worse_epochs >= patience
 
 
+def set_seed(seed: int) -> None:
+    """Seed Python, NumPy, and PyTorch. CUDA kernels may still be nondeterministic."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _git_hash() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def resolve_train_chunk_stride(seq_len: int, chunk_stride: int | None) -> int:
+    if chunk_stride is not None and int(chunk_stride) > 0:
+        return int(chunk_stride)
+    return int(seq_len)
+
+
+def resolve_trainer_eval_chunk_stride(seq_len: int, eval_chunk_stride: int | None) -> int:
+    if eval_chunk_stride is not None and int(eval_chunk_stride) > 0:
+        return int(eval_chunk_stride)
+    return int(seq_len)
+
+
 class Trainer:
     """Training harness for PCLN."""
 
@@ -58,6 +99,10 @@ class Trainer:
         self.log("=" * 80)
         self.log(f"PCLN Training started at {datetime.now().isoformat()}")
         self.log(f"Device: {self.device}")
+        if self.device.type == "cuda":
+            self.log(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        self.log(f"Seed: {getattr(args, 'seed', None)}")
+        self.log(f"Git: {_git_hash()}")
         self.log(f"Args: {args}")
 
         # Load data
@@ -66,6 +111,18 @@ class Trainer:
         self.model = build_pcln(args, self.vocab_size, default_causal=True).to(self.device)
 
         self.log(f"Model parameters: {self._count_params()}")
+        train_stride = resolve_train_chunk_stride(
+            self.args.seq_len, getattr(self.args, "chunk_stride", None)
+        )
+        eval_stride = self._eval_chunk_stride()
+        self.log(
+            "protocol: "
+            f"causal={getattr(self.args, 'causal', True)} "
+            f"train_stride={train_stride} eval_stride={eval_stride} "
+            f"memory={self.args.use_memory} pcn_blocks={self.args.num_pcn_blocks} "
+            f"temporal={getattr(self.args, 'use_temporal_pcn', False)} "
+            f"seed={getattr(self.args, 'seed', None)}"
+        )
 
         # Optimizer and loss
         self.optimizer = optim.AdamW(
@@ -98,9 +155,24 @@ class Trainer:
             targets.reshape(-1),
         )
 
+    def _eval_chunk_stride(self) -> int:
+        return resolve_trainer_eval_chunk_stride(
+            self.args.seq_len, getattr(self.args, "eval_chunk_stride", None)
+        )
+
+    def _assert_wikitext_run_is_valid(self) -> None:
+        if getattr(self.args, "data_file", None):
+            return
+        if getattr(self.args, "dataset", None) != "wikitext2":
+            return
+        tokenization = self.vocab_mappings.get("tokenization", "dummy")
+        if tokenization == "dummy":
+            raise RuntimeError("WikiText-2 training produced dummy tokenization; refusing to start.")
+
     def _load_data(self):
         """Load training and validation data."""
         self.vocab_mappings = {"tokenization": "dummy"}
+        eval_stride = self._eval_chunk_stride()
 
         if self.args.data_file:
             from src.data import get_text_file_dataloader, get_char_level_dataloader
@@ -124,7 +196,7 @@ class Trainer:
                     max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
                     char2id=self.vocab_mappings.get("char2id"),
-                    chunk_stride=self.args.chunk_stride,
+                    chunk_stride=eval_stride,
                 )
             else:
                 train_loader, self.vocab_size, self.vocab_mappings = get_text_file_dataloader(
@@ -144,7 +216,7 @@ class Trainer:
                     max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
                     word2id=self.vocab_mappings.get("word2id"),
-                    chunk_stride=self.args.chunk_stride,
+                    chunk_stride=eval_stride,
                 )
         elif self.args.dataset == "dummy":
             self.log("Loading dummy dataset...")
@@ -181,7 +253,7 @@ class Trainer:
                     max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
                     char2id=self.vocab_mappings.get("char2id"),
-                    chunk_stride=self.args.chunk_stride,
+                    chunk_stride=eval_stride,
                 )
             else:
                 train_loader, self.vocab_size, self.vocab_mappings = get_wikitext2_dataloader(
@@ -201,7 +273,7 @@ class Trainer:
                     max_samples=_resolve_max_samples(self.args.num_val_samples),
                     shuffle=False,
                     word2id=self.vocab_mappings.get("word2id"),
-                    chunk_stride=self.args.chunk_stride,
+                    chunk_stride=eval_stride,
                 )
 
         self.train_loader = train_loader
@@ -209,6 +281,7 @@ class Trainer:
         self.log(f"Vocab size: {self.vocab_size}")
         self.log(f"Tokenization: {self.vocab_mappings.get('tokenization', 'unknown')}")
         self.log(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
+        self._assert_wikitext_run_is_valid()
 
     def _count_params(self) -> int:
         return sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -242,9 +315,15 @@ class Trainer:
                 self.optimizer.load_state_dict(ck["optimizer_state"])
             except Exception as e:
                 self.log(f"Could not load optimizer state: {e}")
+        if "scheduler_state" in ck:
+            try:
+                self.scheduler.load_state_dict(ck["scheduler_state"])
+            except Exception as e:
+                self.log(f"Could not load scheduler state: {e}")
         self.epoch = ck.get("epoch", -1) + 1
         self.step = ck.get("step", 0)
         self.best_val_loss = ck.get("best_val_loss", float("inf"))
+        self.worse_epochs = int(ck.get("worse_epochs", 0) or 0)
         if self.best_val_loss == float("inf") and self.log_file.exists():
             import re
             matches = re.findall(
@@ -352,6 +431,8 @@ class Trainer:
             "step": self.step,
             "model_state": self.model.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
+            "scheduler_state": self.scheduler.state_dict(),
+            "worse_epochs": self.worse_epochs,
             "args": self.args,
             "vocab_mappings": self.vocab_mappings,
             "best_val_loss": self.best_val_loss,
@@ -425,6 +506,12 @@ def main(argv=None):
         type=int,
         default=None,
         help="Token stride between training chunks; default seq_len (no overlap). Use seq_len/2 for overlap.",
+    )
+    parser.add_argument(
+        "--eval-chunk-stride",
+        type=int,
+        default=None,
+        help="Token stride for validation chunks; default seq_len (non-overlapping).",
     )
     parser.add_argument("--vocab-size", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -502,11 +589,13 @@ def main(argv=None):
     parser.add_argument("--label-smoothing", type=float, default=0.0)
     parser.add_argument("--max-seq-len", type=int, default=None,
                         help="Positional encoding length (default max(512, seq_len))")
+    parser.add_argument("--seed", type=int, default=42, help="Python/NumPy/PyTorch seed")
 
     args = parser.parse_args(argv)
     if args.max_seq_len is None:
         args.max_seq_len = max(512, args.seq_len)
-    
+    set_seed(int(args.seed))
+
     trainer = Trainer(args)
     trainer.train()
 
